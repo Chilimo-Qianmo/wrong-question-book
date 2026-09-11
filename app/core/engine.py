@@ -149,7 +149,8 @@ def export_figures(pdf: str, images_root: str, out_dir: str | None = None,
             dst = os.path.join(qdir, name)
             ok = None
             if f.page in lay.render_paths:
-                ok = crop_from_image(lay.render_paths[f.page], f.bbox, dst)
+                # 渲染图是 scale 倍 72dpi，写入 DPI 后 Word 里即可按原图尺寸插入
+                ok = crop_from_image(lay.render_paths[f.page], f.bbox, dst, dpi=72.0 * scale)
             if not ok:
                 ok = crop_from_page(pdf, f.page, f.bbox, dst,
                                     resolution=int(72 * max(1.5, scale)))

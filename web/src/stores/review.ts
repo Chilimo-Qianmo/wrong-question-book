@@ -28,6 +28,7 @@ export const useReviewStore = defineStore('review', () => {
       qno: q.qno,
       page: q.page || 0,
       stem: q.stem || '',
+      regions: q.regions || [],
       options: q.options || {},
       source: q.source || 'ocr',
       conf: typeof q.conf === 'number' ? q.conf : 1,

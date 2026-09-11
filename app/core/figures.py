@@ -40,14 +40,16 @@ def crop_from_page(path: str, page_no: int, bbox, out_path: str, resolution: int
             crop = page.crop(tuple(bbox))
             img = crop.to_image(resolution=resolution)
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            # 注意：pdfplumber 的 PageImage.save() 内部已按 resolution 写入 DPI，
+            # 再传 dpi= 会报 "multiple values for keyword argument 'dpi'"。
             img.save(out_path)
             return out_path
     except Exception:
         return None
 
 
-def crop_from_image(img_path: str, bbox, out_path: str, pad: int = 6) -> str | None:
-    """从已渲染的页面图裁切（扫描版）。"""
+def crop_from_image(img_path: str, bbox, out_path: str, pad: int = 6, dpi: float = 0) -> str | None:
+    """从已渲染的页面图裁切（扫描版）。dpi>0 时写入图片元数据，便于按原图尺寸插入。"""
     try:
         from PIL import Image
         im = Image.open(img_path)
@@ -55,7 +57,11 @@ def crop_from_image(img_path: str, bbox, out_path: str, pad: int = 6) -> str | N
         x0, y0 = max(0, x0 - pad), max(0, y0 - pad)
         x1, y1 = min(im.width, x1 + pad), min(im.height, y1 + pad)
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        im.crop((x0, y0, x1, y1)).save(out_path)
+        out = im.crop((x0, y0, x1, y1))
+        if dpi and dpi > 1:
+            out.save(out_path, dpi=(dpi, dpi))
+        else:
+            out.save(out_path)
         return out_path
     except Exception:
         return None

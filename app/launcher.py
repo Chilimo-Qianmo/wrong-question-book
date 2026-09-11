@@ -41,6 +41,11 @@ def wait_ready(port: int, timeout: float = 30.0) -> bool:
 
 
 def main() -> int:
+    # 必须在创建任何窗口之前声明 DPI 感知：
+    # 否则在 4K/高缩放屏上，系统「选择文件」对话框会被位图拉伸得又小又糊。
+    from app import dpi
+    dpi_tag = dpi.enable_dpi_awareness()
+
     ap = argparse.ArgumentParser(description="错题集生成器 v2 启动器")
     ap.add_argument("--port", type=int, default=0, help="固定端口（默认随机空闲端口）")
     ap.add_argument("--no-window", action="store_true", help="只起服务，不开界面")
@@ -83,6 +88,7 @@ def main() -> int:
 
     print("=" * 56)
     print(" 学生错题集生成器 v2")
+    print(" DPI 感知：%s" % dpi.describe())
     print(" 界面地址：%s" % url)
     print(" 关闭本窗口即结束程序。")
     print("=" * 56)

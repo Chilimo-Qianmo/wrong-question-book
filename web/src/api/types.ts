@@ -73,10 +73,19 @@ export interface TableRef {
   image_url: string | null
 }
 
+/** 题目在原始试卷上的区域（核对页右侧「原题区域」用） */
+export interface RegionOut {
+  page: number
+  bbox: number[]
+  space: 'pdf' | 'render'
+  scale: number
+}
+
 export interface QuestionOut {
   qno: number
   page: number
   stem: string
+  regions: RegionOut[]
   options: Record<string, string>
   source: QuestionSource
   conf: number

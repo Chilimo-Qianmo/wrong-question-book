@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import models as M
 from app.jobs import JOBS, start, sweep
-from app.core import engine, archive, excel as xl, docx_build, merge_docx
+from app.core import engine, archive, excel as xl, docx_build, merge_docx, cache as cache_mod
 from app.core.figures import assign_to_questions, crop_from_page, crop_from_image
 
 VERSION = "2.0.1"
@@ -109,13 +109,35 @@ def put_settings(s: M.Settings):
     return _settings
 
 
+_DPI_READY = False
+
+
 @app.post("/api/dialog/pick")
 def dialog_pick(req: M.PickRequest):
-    """弹出系统文件对话框（无 GUI 环境返回空数组）。"""
+    """弹出系统文件对话框（无 GUI 环境返回空数组）。
+
+    高 DPI 适配：先声明进程 DPI 感知，再按主屏 DPI 设置 Tk 缩放，
+    否则在 4K/高缩放屏上对话框会被系统拉伸得又小又糊。
+    """
+    global _DPI_READY
     try:
         import tkinter as tk
         from tkinter import filedialog
+        if not _DPI_READY:
+            from app import dpi as _dpi
+            _dpi.enable_dpi_awareness()
+            _DPI_READY = True
         root = tk.Tk()
+        # 让 Tk 按真实 DPI 缩放（默认 72dpi 基准）
+        try:
+            scale = _dpi.tk_scaling()
+            root.tk.call("tk", "scaling", scale)
+        except Exception:                               # noqa: BLE001
+            pass
+        try:
+            root.tk.call("wm", "attributes", ".", "-alpha", 0.0)   # 隐藏闪一下的空窗
+        except Exception:                               # noqa: BLE001
+            pass
         root.withdraw()
         root.attributes("-topmost", True)
         init = req.initialdir or ""
@@ -184,6 +206,53 @@ def source_inspect(payload: dict):
     if not pdf or not os.path.exists(pdf):
         raise HTTPException(400, "PDF 不存在")
     return engine.pdf_router.inspect_pdf(pdf)
+
+
+@app.get("/api/media/region")
+def media_region(pdf: str = Query(...), page: int = Query(1),
+                 x0: float = Query(0), y0: float = Query(0),
+                 x1: float = Query(0), y1: float = Query(0),
+                 space: str = Query("pdf"), scale: float = Query(1.0),
+                 dpi: int = Query(150)):
+    """按题目区域从原卷裁切出图片（核对页右侧的「原题区域」）。
+
+    space='render' 时坐标是渲染图像素，按 scale 换算回 PDF 点再裁切。
+    结果落盘缓存，同一区域只渲染一次。
+    """
+    import hashlib
+    import pdfplumber
+
+    ap = os.path.abspath(pdf)
+    if not os.path.exists(ap) or not ap.lower().endswith(".pdf"):
+        raise HTTPException(400, "不是有效的 PDF 路径")
+    s = float(scale or 1.0)
+    if space == "render" and s > 0.01:
+        x0, y0, x1, y1 = x0 / s, y0 / s, x1 / s, y1 / s
+    if x1 <= x0 or y1 <= y0:
+        raise HTTPException(400, "区域无效")
+    dpi = max(72, min(400, int(dpi or 150)))
+
+    cache_dir, _render = engine.work_dirs(load_settings().out_dir)
+    key = "%s|%d|%.1f|%.1f|%.1f|%.1f|%d" % (
+        cache_mod.fingerprint(ap), page, x0, y0, x1, y1, dpi)
+    fp = os.path.join(cache_dir, "crop", hashlib.sha1(key.encode()).hexdigest()[:20] + ".png")
+    if not os.path.exists(fp):
+        os.makedirs(os.path.dirname(fp), exist_ok=True)
+        try:
+            with pdfplumber.open(ap) as doc:
+                if page < 1 or page > len(doc.pages):
+                    raise HTTPException(400, "页码超出范围")
+                pg = doc.pages[page - 1]
+                bbox = (max(0.0, x0), max(0.0, y0),
+                        min(float(pg.width), x1), min(float(pg.height), y1))
+                img = pg.crop(bbox).to_image(resolution=dpi)
+                img.save(fp)                        # PageImage.save() 已按 resolution 写入 DPI
+        except HTTPException:
+            raise
+        except Exception as e:                          # noqa: BLE001
+            raise HTTPException(500, "裁切失败：%s" % e)
+    return FileResponse(fp, media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=3600"})
 
 
 # --------------------------------------------------------------------------- #

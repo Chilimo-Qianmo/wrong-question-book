@@ -69,10 +69,23 @@ class TableRef(BaseModel):
     image_url: Optional[str] = None           # 扫描版裁图预览
 
 
+class RegionOut(BaseModel):
+    """题目在原始试卷上的区域（用于核对页右侧显示「原题区域」）。
+
+    space='pdf'    坐标是 PDF 点（电子版文字层所在坐标系）
+    space='render' 坐标是渲染图像素（扫描版 OCR 所在坐标系），scale 为渲染倍率
+    """
+    page: int = 1
+    bbox: list[float] = Field(default_factory=list)
+    space: Literal["pdf", "render"] = "pdf"
+    scale: float = 1.0
+
+
 class QuestionOut(BaseModel):
     qno: int
     page: int = 0
     stem: str = ""
+    regions: list[RegionOut] = Field(default_factory=list)
     options: dict[str, str] = Field(default_factory=dict)
     source: Literal["text", "ocr", "config", "mixed"] = "ocr"
     conf: float = 1.0

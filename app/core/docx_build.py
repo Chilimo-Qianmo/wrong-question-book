@@ -48,7 +48,13 @@ LAYOUT = {
     "line_spacing": 1.1,
     "page_margin_cm": 1.27,
     "hdr_ftr_dist_cm": 0.8,
-    "image_width_in": 6.0,
+    # --- 图片 ---
+    # natural=True 时按图片自身的物理尺寸（像素 ÷ DPI）插入，尽量与原图一致；
+    # image_width_in / image_max_height_in 只作为上限，超出才等比缩小，不放大。
+    "image_natural": True,
+    "image_width_in": 6.0,          # 宽度上限（英寸）
+    "image_max_height_in": 9.2,     # 高度上限（英寸），防止单图超出一页
+    "image_dpi_fallback": 96.0,     # 图片未带 DPI 信息时的兜底 DPI
 }
 
 SUBTITLE_SIZE = 9
@@ -198,15 +204,64 @@ def add_table(doc, spec, layout=None):
     return tbl
 
 
-def insert_images(doc, img_paths, width_in=None, layout=None):
-    """逐张居中插图，宽 6 英寸；插入失败的图片在正文留一行提示（不静默丢弃）。"""
+def image_display_size(path, layout=None):
+    """计算图片应以多大尺寸插入。
+
+    默认按「原图尺寸」：像素数 ÷ 图片自带 DPI（自动抽取的配图会写入渲染 DPI），
+    这样插入后的高度/宽度与试卷上的原图一致，不会被放大得又大又糊。
+    仅当超过上限（宽 image_width_in / 高 image_max_height_in）时才等比缩小；
+    永远不会放大超过原图尺寸。返回 (宽英寸, 高英寸)。
+    """
     L = resolve_layout(layout)
-    width = L["image_width_in"] if width_in is None else width_in
+    w_px = h_px = 0
+    dpi_x = dpi_y = 0.0
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            w_px, h_px = im.size
+            dpi = im.info.get("dpi") or (0, 0)
+            dpi_x = float(dpi[0] or 0)
+            dpi_y = float(dpi[1] or 0)
+    except Exception:                                   # noqa: BLE001
+        pass
+
+    fallback = float(L.get("image_dpi_fallback") or 96.0)
+    max_w = float(L.get("image_width_in") or 6.0)
+    max_h = float(L.get("image_max_height_in") or 9.2)
+
+    if not L.get("image_natural", True) or not w_px or not h_px:
+        return max_w, None                              # 旧行为：给定宽度，高度按比例
+    if dpi_x <= 1 or dpi_y <= 1:                        # 没有 DPI 信息时取兜底值
+        dpi_x = dpi_y = fallback
+    natural_w = w_px / dpi_x
+    natural_h = h_px / dpi_y
+    scale = 1.0
+    if natural_w > max_w:
+        scale = max_w / natural_w
+    if natural_h * scale > max_h:                       # 超高时优先保证不出页
+        scale = max_h / natural_h
+    return natural_w * scale, natural_h * scale
+
+
+def insert_images(doc, img_paths, width_in=None, layout=None):
+    """逐张居中插图：默认按原图尺寸（高度与原图一致），超限才等比缩小。
+
+    插入失败的图片在正文留一行提示（不静默丢弃）。
+    """
+    L = resolve_layout(layout)
     for path in img_paths:
         try:
             para = doc.add_paragraph()
             para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            para.add_run().add_picture(path, width=Inches(width))
+            run = para.add_run()
+            if width_in is not None:                    # 显式指定宽度时沿用旧行为
+                run.add_picture(path, width=Inches(width_in))
+            else:
+                w, h = image_display_size(path, layout)
+                if h:
+                    run.add_picture(path, width=Inches(w), height=Inches(h))
+                else:
+                    run.add_picture(path, width=Inches(w))
         except Exception as exc:  # noqa: BLE001  —— 与旧版一致：失败要看得见
             add_body(doc, "[图片插入失败:%s: %s]" % (os.path.basename(str(path)), exc),
                      size=9, layout=layout)

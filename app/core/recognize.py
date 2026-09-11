@@ -218,6 +218,48 @@ def split_question(lines):
     return stem, options, letters
 
 
+def question_regions(questions, layout) -> dict:
+    """计算每道题在原始试卷上的区域（供核对页右侧显示「原题区域」）。
+
+    区域 = 该页正文横向范围 ×（本题首行 y → 下一题首行 y），
+    这样右侧显示的就是「这道题在卷子上的原始样子」，便于逐字比对。
+    """
+    page_x: dict = {}
+    for b in layout.boxes:
+        cur = page_x.get(b.page)
+        page_x[b.page] = (min(cur[0], b.x0), max(cur[1], b.x1)) if cur else (b.x0, b.x1)
+    ordered = sorted(questions)
+    out: dict = {}
+    for qi, qno in enumerate(ordered):
+        per_page: dict = {}
+        for ln in questions[qno]:
+            v = per_page.get(ln.page)
+            per_page[ln.page] = [min(v[0], ln.y0), max(v[1], ln.y1)] if v else [ln.y0, ln.y1]
+        regs = []
+        for p in sorted(per_page):
+            y0, y1 = per_page[p]
+            next_y = None
+            for q2 in ordered[qi + 1:]:
+                cand = [ln.y0 for ln in questions[q2] if ln.page == p]
+                if cand:
+                    next_y = min(cand)
+                    break
+            bottom = (next_y - 2.0) if next_y is not None else layout.page_height(p)
+            if bottom <= y0:
+                bottom = y1 + 4
+            x0, x1 = page_x.get(p, (0.0, layout.page_sizes.get(p, (0.0, 0.0))[0]))
+            is_pdf = layout.page_kind.get(p, "scanned") == "digital"
+            regs.append({
+                "page": p,
+                "bbox": [round(x0 - 4, 1), round(max(0.0, y0 - 4), 1),
+                         round(x1 + 4, 1), round(bottom, 1)],
+                "space": "pdf" if is_pdf else "render",
+                "scale": 1.0 if is_pdf else float(layout.scale or 1.0),
+            })
+        out[qno] = regs
+    return out
+
+
 def question_spans(questions, layout):
     """{qno: [(page, y0, y1), ...]}，用于把图/表/被剔除文本归属到题。"""
     spans = {}
@@ -253,6 +295,7 @@ def detect_questions(layout, config: dict | None = None, progress=None):
         progress("整理题目结构", 1, 1)
     questions, gaps, declared = group_questions(lines, notes)
     spans = question_spans(questions, layout)
+    regions = question_regions(questions, layout)
 
     fig_assign = assign_to_questions(layout.figures, spans) if layout.figures else {}
     tbl_assign, drop_assign = {}, {}
@@ -335,6 +378,7 @@ def detect_questions(layout, config: dict | None = None, progress=None):
 
         out.append({
             "qno": int(qno), "page": lines_q[0].page, "stem": stem, "options": options,
+            "regions": regions.get(qno, []),
             "source": src, "conf": round(max(0.05, min(1.0, conf)), 3),
             "warnings": warns, "dropped": dropped, "figures": figures, "tables": tables,
             "verified": False,
