@@ -5,11 +5,17 @@
 
 # ---------------------------------------------------------------------------
 # 1. 密钥与凭据（最高优先级 —— 绝不提交）
+#    规则经过实测：新建 .env / *.key / *secret*.py 后 git status 必须保持干净。
 # ---------------------------------------------------------------------------
+# --- 1.1 环境变量文件 ---
 .env
 .env.*
 !.env.example
 *.env
+.envrc
+*.envrc
+
+# --- 1.2 私钥与证书 ---
 *.key
 *.pem
 *.p12
@@ -19,20 +25,63 @@
 *.ppk
 *.der
 *.cer
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+
+# --- 1.3 凭据 / 令牌文件（覆盖各语言扩展名）---
 *_secret.*
 *secret*.json
+*secret*.py
+*secret*.js
+*secret*.ts
+*secret*.vue
+*secret*.yaml
+*secret*.yml
+*secret*.toml
+*secret*.ini
+*secret*.cfg
 secrets.json
+secrets.yaml
+secrets.yml
 credentials.json
-credentials*.json
+*credentials*.json
+*credential*.json
+*credential*.py
+*credential*.js
+*credential*.ts
+*service_account*.json
+*service-account*.json
+service_account.json
+google-services.json
+GoogleService-Info.plist
+firebase*.json
+firebase-adminsdk*.json
 auth.json
 *.token
 token*.json
+*_token.*
+*_tokens.*
 api_key*
 apikey*
 *_api_key*
+*api_keys*
 openai*.json
 config.local.*
 local.settings.json
+
+# --- 1.4 工具链凭据文件（常含明文令牌）---
+.npmrc
+.pypirc
+.netrc
+_netrc
+.dockercfg
+.docker/config.json
+terraform.tfvars
+*.tfvars
+kubeconfig
+*.kubeconfig
 
 # ---------------------------------------------------------------------------
 # 2. 学生隐私数据（真实姓名 / 成绩 / 答题情况 —— 绝不提交）
