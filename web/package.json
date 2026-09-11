@@ -1,0 +1,25 @@
+{
+  "name": "wtt-web",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "description": "学生错题集生成器 · Vue3 前端（Vite + TypeScript + Pinia + vue-router）",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "pinia": "^3.0.3",
+    "vue": "^3.5.22",
+    "vue-router": "^4.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.0",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.9",
+    "vue-tsc": "^3.0.0"
+  }
+}

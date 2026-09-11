@@ -1,0 +1,19 @@
+# 错题集生成器 v2 运行依赖
+# PDF 解析
+pypdfium2
+pdfplumber
+# OCR（仅扫描版试卷需要）
+rapidocr_onnxruntime
+onnxruntime
+opencv-python
+pillow
+# 文档与表格
+python-docx
+openpyxl
+# 本地服务（Web 界面）
+fastapi
+uvicorn
+# 可选：原生窗口（不装则用系统浏览器打开界面）
+# pywebview
+# 仅旧版 tkinter 界面需要（legacy/ 目录）
+# customtkinter
