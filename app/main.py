@@ -93,9 +93,17 @@ def health():
             return True
         except Exception:
             return False
+    try:
+        from app import dpi as _dpi
+        dpi_info = {"awareness": _dpi.enable_dpi_awareness(),
+                    "primary_dpi": _dpi.primary_dpi(),
+                    "tk_scaling": round(_dpi.tk_scaling(), 3)}
+    except Exception:                                   # noqa: BLE001
+        dpi_info = {}
     return {"ok": True, "version": VERSION,
             "engine": {"pdfplumber": has("pdfplumber"), "rapidocr": has("rapidocr_onnxruntime"),
-                       "opencv": has("cv2"), "docx": has("docx")}}
+                       "opencv": has("cv2"), "docx": has("docx")},
+            "dpi": dpi_info}
 
 
 @app.get("/api/settings", response_model=M.Settings)
