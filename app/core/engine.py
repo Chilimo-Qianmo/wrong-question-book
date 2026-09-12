@@ -8,6 +8,7 @@ import time
 from app.models import DetectPayload, QuestionOut, Gap, SourceInfo, LayoutKind
 from app.core import pdf_router, recognize, cache as cache_mod
 from app.core.layout import Layout
+from app.core import image_store as store
 from app.core.figures import assign_to_questions, crop_from_page, crop_from_image, safe_name
 
 
@@ -168,7 +169,8 @@ def export_figures(pdf: str, images_root: str, out_dir: str | None = None,
     for qno, flist in sorted(assign.items()):
         names = []
         for k, f in enumerate(flist, 1):
-            name = "自动抽取_第%d题_%d.png" % (qno, k)
+            # 名字前缀由 image_store 统一约定：换试卷时按前缀清理旧产物
+            name = store.AUTO_PREFIX + ("第%d题_%d.png" % (qno, k))
             dst = os.path.join(images_root, name)
             ok = None
             if f.page in lay.render_paths:

@@ -99,6 +99,23 @@ button {
   font-size: 15px;
   opacity: 0.95;
 }
+/* 未完成第②步核对时，③ 题目配图 / ④ 生成为锁定状态（v2.3.4 起） */
+.step.locked {
+  color: #8b98ad;
+  cursor: not-allowed;
+}
+.step.locked:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #a6b2c6;
+}
+.step .lock {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+}
 /* 左侧导航不再显示状态小圆点（v2.3 移除） */
 .navfoot {
   margin-top: auto;

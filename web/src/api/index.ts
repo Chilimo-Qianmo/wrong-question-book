@@ -1,4 +1,5 @@
 import type {
+  AutoSource,
   DetectRequest,
   ExcelPeek,
   GenerateRequest,
@@ -132,6 +133,7 @@ export const api = {
       assign: Record<string, string[]>
       counts: Record<string, number>
       notes: string[]
+      auto_source: AutoSource
     }>('/api/images/library', { images_root: imagesRoot }),
   imagesList: (imagesRoot: string, qno: number) =>
     post<{ files: ImageFile[] }>('/api/images/list', { images_root: imagesRoot, qno }),
@@ -143,11 +145,20 @@ export const api = {
     post<{ files: ImageFile[] }>('/api/images/delete', { images_root: imagesRoot, names }),
   imagesClear: (imagesRoot: string) =>
     post<{ removed: number; files: ImageFile[] }>('/api/images/clear', { images_root: imagesRoot }),
-  imagesAutofill: (pdf: string, imagesRoot: string, questions: QuestionOut[]) =>
-    post<{ assigned: Record<string, string[]> }>('/api/images/autofill', {
+  /** 从 PDF 自动抽取配图：后端会先清掉上一轮自动抽取的图（换试卷不会留残影） */
+  imagesAutofill: (pdf: string, imagesRoot: string, questions?: QuestionOut[]) =>
+    post<{
+      assigned: Record<string, string[]>
+      purged: number
+      previous_pdf: string
+      source_pdf: string
+      changed_source: boolean
+      library_count: number
+      assign_counts: Record<string, number>
+    }>('/api/images/autofill', {
       pdf,
       images_root: imagesRoot,
-      questions,
+      questions: questions || [],
     }),
 
   /* 答题表 */

@@ -9,14 +9,26 @@ import json
 import os
 import re
 import shutil
+import time
 
 MANIFEST = "配图分配.json"
 SUPPORTED = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp")
 _LEGACY_MARK = "_已迁移到平铺目录"
 
+# 「从 PDF 自动抽取配图」产物的保留前缀与来源记录。
+# 这些文件是程序自己的产物：换一份试卷重新抽取时，必须先按前缀清掉，
+# 否则上一份试卷的图会继续挂在题号上（用户反馈：换 PDF 后配图页还是旧试卷的图）。
+AUTO_PREFIX = "自动抽取_"
+AUTO_RECORD = "自动抽取来源.json"
+
 
 def _is_image(name: str) -> bool:
     return name.lower().endswith(SUPPORTED)
+
+
+def is_auto(name: str) -> bool:
+    """是否是「自动抽取」生成的图片。"""
+    return os.path.basename(str(name)).startswith(AUTO_PREFIX)
 
 
 def manifest_path(root: str) -> str:
@@ -103,7 +115,7 @@ def library(root: str) -> list:
             size = os.path.getsize(fp)
         except OSError:
             size = 0
-        out.append({"name": name, "path": fp, "size": size,
+        out.append({"name": name, "path": fp, "size": size, "auto": is_auto(name),
                     "url": "/api/media?path=" + fp.replace("\\", "/")})
     return out
 
@@ -114,7 +126,7 @@ def _file_info(root: str, name: str) -> dict:
         size = os.path.getsize(fp)
     except OSError:
         size = 0
-    return {"name": name, "path": fp, "size": size,
+    return {"name": name, "path": fp, "size": size, "auto": is_auto(name),
             "url": "/api/media?path=" + fp.replace("\\", "/")}
 
 
@@ -203,3 +215,79 @@ def cover_for(root: str, qno) -> str:
     """该题的首图 URL（用于缩略图墙），没有则空串。"""
     items = assigned_info(root, qno)
     return items[0]["url"] if items else ""
+
+
+# --------------------------------------------------------------------------- #
+# 自动抽取的产物管理
+# --------------------------------------------------------------------------- #
+def auto_record_path(root: str) -> str:
+    return os.path.join(root, AUTO_RECORD)
+
+
+def load_auto_record(root: str) -> dict:
+    """上次自动抽取的来源信息：{pdf, name, fingerprint, files, at}。"""
+    fp = auto_record_path(root)
+    if not os.path.isfile(fp):
+        return {}
+    try:
+        with open(fp, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_auto_record(root: str, pdf: str, fingerprint: str, files: dict) -> dict:
+    rec = {"pdf": os.path.abspath(pdf or ""), "name": os.path.basename(pdf or ""),
+           "fingerprint": fingerprint or "",
+           "files": {str(k): list(v) for k, v in (files or {}).items()},
+           "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    try:
+        os.makedirs(root, exist_ok=True)
+        with open(auto_record_path(root), "w", encoding="utf-8") as f:
+            json.dump(rec, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+    return rec
+
+
+def purge_auto(root: str) -> list:
+    """删除上一次自动抽取留下的图片，并把它们从所有题目的分配里移除。
+
+    换试卷后必须重新抽取：这些文件带固定前缀，属于程序自己的产物，
+    不能和用户自己导入的图片混在一起留在库里。
+    返回被删掉的文件名。
+    """
+    if not root or not os.path.isdir(root):
+        return []
+    removed = []
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        names = []
+    for name in names:
+        if not is_auto(name):
+            continue
+        fp = os.path.join(root, name)
+        if not os.path.isfile(fp):
+            continue
+        try:
+            os.remove(fp)
+            removed.append(name)
+        except OSError:
+            continue
+    # 分配表里可能还留着名字（文件被手工删过），一并清掉
+    assign_map = load_assign(root)
+    stale = 0
+    for k in list(assign_map):
+        keep = [n for n in assign_map[k] if not is_auto(n)]
+        stale += len(assign_map[k]) - len(keep)
+        assign_map[k] = keep
+    if stale:
+        save_assign(root, assign_map)
+    try:
+        os.remove(auto_record_path(root))           # 来源记录随之失效
+    except OSError:
+        pass
+    return removed
+

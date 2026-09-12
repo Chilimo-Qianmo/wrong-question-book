@@ -218,6 +218,16 @@ export interface ImageFile {
   path: string
   url: string
   size: number
+  /** true = 「从 PDF 自动抽取配图」生成的图片（换试卷重新抽取时会被自动清理） */
+  auto?: boolean
+}
+
+/** 自动抽取配图的来源记录（换试卷后重新抽取会先清掉旧产物） */
+export interface AutoSource {
+  pdf: string
+  name: string
+  at: string
+  count: number
 }
 
 export interface HealthInfo {

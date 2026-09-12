@@ -24,7 +24,7 @@ from app.core import image_store as store, regions
 from app import paths
 from app.core.figures import assign_to_questions, crop_from_page, crop_from_image
 
-VERSION = "2.3.3"
+VERSION = "2.3.4"
 
 
 def _bundle_dir() -> str:
@@ -396,8 +396,12 @@ def images_library(payload: dict):
     assign = store.load_assign(root)
     counts = {k: len([n for n in v if os.path.isfile(os.path.join(root, n))])
               for k, v in assign.items()}
+    auto = store.load_auto_record(root)           # 自动抽取的来源试卷（供界面提示）
     return {"root": root, "files": store.library(root), "assign": assign,
-            "counts": counts, "notes": notes}
+            "counts": counts, "notes": notes,
+            "auto_source": {"pdf": auto.get("pdf") or "", "name": auto.get("name") or "",
+                            "at": auto.get("at") or "",
+                            "count": sum(len(v) for v in (auto.get("files") or {}).values())}}
 
 
 @app.post("/api/images/list")
@@ -451,18 +455,35 @@ def images_clear(payload: dict):
 
 @app.post("/api/images/autofill")
 def images_autofill(payload: dict):
-    """从 PDF 自动抽取配图，平铺写入图片库并自动分配到对应题号。"""
+    """从 PDF 自动抽取配图，平铺写入图片库并自动分配到对应题号。
+
+    抽取前一定先清掉上一轮「自动抽取_*」产物（含分配关系）：
+    换一份试卷后，旧试卷的配图不能继续挂在题号上。
+    用户自己导入的图片不受影响。
+    """
     pdf = (payload or {}).get("pdf") or ""
     root = (payload or {}).get("images_root") or load_settings().images_root
     if not pdf or not os.path.exists(pdf):
         raise HTTPException(400, "PDF 不存在")
     os.makedirs(root, exist_ok=True)
     store.migrate_legacy(root)
+    prev = store.load_auto_record(root)
+    purged = store.purge_auto(root)                     # 先清旧产物，再抽新的
     found = engine.export_figures(pdf, root, load_settings().out_dir)
     for qno, names in found.items():
         store.assign(root, qno, names)
     assign = store.load_assign(root)
+    try:
+        fp = cache_mod.fingerprint(pdf)
+    except OSError:
+        fp = ""
+    rec = store.save_auto_record(root, pdf, fp, found)
+    changed = bool(prev.get("fingerprint")) and prev.get("fingerprint") != rec["fingerprint"]
     return {"assigned": found,
+            "purged": len(purged),
+            "previous_pdf": prev.get("name") or "",
+            "source_pdf": rec["name"],
+            "changed_source": changed,
             "counts": {str(k): len(v) for k, v in found.items()},
             "library_count": len(store.library(root)),
             "assign_counts": {k: len(v) for k, v in assign.items()}}

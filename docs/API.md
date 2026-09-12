@@ -61,14 +61,26 @@ data: {"state":"done"|"error"|"cancelled"}
 | POST | `/api/config/save` | `{config:QuestionConfig, exam:str, out_dir:str}` | `{path:str, folder:str}` |
 | POST | `/api/config/load` | `{path:str}` | `QuestionConfig` |
 
-## 5. 配图与表格
+## 5. 配图（平铺图片库）
+
+图片**平铺**放在 `images_root` 里，用清单 `配图分配.json` 记录「哪张图属于哪道题」；
+不分题号子目录。`files[].auto` 标记该图是否为「自动抽取」产物。
 
 | 方法 | 路径 | 入参 | 出参 |
 |---|---|---|---|
-| POST | `/api/images/list` | `{images_root:str, qno:int}` | `{files:[{name,path,url,size}]}` |
-| POST | `/api/images/assign` | `{images_root:str, qno:int, paths:[str]}` | `{files:[...]}` （复制进 `图片/<题号>/`） |
-| POST | `/api/images/delete` | `{images_root:str, qno:int, names:[str]}` | `{files:[...]}` |
-| POST | `/api/images/autofill` | `{pdf:str, images_root:str, questions:[QuestionOut]}` | `{assigned:{qno:[...]}}` （电子版按图 bbox 自动归属并导出） |
+| POST | `/api/images/library` | `{images_root:str}` | `{root, files:[ImageFile], assign:{qno:[name]}, counts, notes, auto_source}` |
+| POST | `/api/images/list` | `{images_root:str, qno:int}` | `{files:[ImageFile]}` |
+| POST | `/api/images/assign` | `{images_root:str, qno:int, paths:[str]}` | `{files:[...]}`（外部路径会复制进图片库） |
+| POST | `/api/images/unassign` | `{images_root:str, qno:int, names:[str]}` | `{files:[...]}`（只解除分配，不删文件） |
+| POST | `/api/images/delete` | `{images_root:str, names:[str]}` | `{files:[...]}`（删文件并从所有题目移除） |
+| POST | `/api/images/clear` | `{images_root:str}` | `{removed:int, files:[]}` |
+| POST | `/api/images/autofill` | `{pdf:str, images_root:str, questions?:[QuestionOut]}` | `{assigned:{qno:[name]}, purged:int, previous_pdf:str, source_pdf:str, changed_source:bool, library_count, assign_counts}` |
+
+**自动抽取的清理约定（v2.3.4）**：自动抽取产物统一命名为 `自动抽取_第N题_K.png`。
+每次调用 `/api/images/autofill` 都会**先删除上一轮的全部自动抽取产物**（含 `配图分配.json`
+里的分配关系），再按当前 PDF 重新抽取并写入 `自动抽取来源.json`（记录 pdf/fingerprint/文件列表）。
+因此换一份试卷后不会残留上一份试卷的配图；用户自己导入的图片不受影响。
+`auto_source` 字段把这份来源记录回传给界面显示。
 
 ## 6. 答题表
 
