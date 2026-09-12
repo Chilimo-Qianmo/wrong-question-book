@@ -61,6 +61,16 @@ def main() -> int:
     created = paths.ensure_dirs(app_dir())
     if created and not args.no_window:
         print("已创建目录：%s" % "、".join(os.path.basename(p) for p in created))
+    # 读一次设置：会顺带把失效的目录（例如指向已不存在的临时目录）改回程序所在目录
+    try:
+        from app.main import load_settings
+        _s = load_settings()
+        if not args.no_window:
+            print("输出目录：%s" % _s.out_dir)
+            print("图片目录：%s" % _s.images_root)
+            print("缓存目录：%s" % os.path.join(app_dir(), ".cache"))
+    except Exception:                                   # noqa: BLE001
+        pass
 
     import uvicorn
     port = args.port or free_port()

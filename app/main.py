@@ -6,6 +6,7 @@ import json
 import os
 import queue
 import sys
+import tempfile
 import re
 import threading
 import time
@@ -23,7 +24,7 @@ from app.core import image_store as store, regions
 from app import paths
 from app.core.figures import assign_to_questions, crop_from_page, crop_from_image
 
-VERSION = "2.3.1"
+VERSION = "2.3.2"
 
 
 def _bundle_dir() -> str:
@@ -48,6 +49,53 @@ _DEFAULT_SETTINGS = M.Settings(
 _settings = _DEFAULT_SETTINGS.model_copy()
 
 
+def _is_temp_path(p: str) -> bool:
+    """判断路径是否落在系统临时目录里（自动化测试留下的脏路径）。"""
+    try:
+        t = os.path.abspath(tempfile.gettempdir()).lower().rstrip("\\")
+        return os.path.abspath(p).lower().startswith(t)
+    except Exception:                                   # noqa: BLE001
+        return False
+
+
+def _sanitize_settings(s: M.Settings) -> tuple:
+    """把失效的目录拉回「exe 所在的目录」。
+
+    只要有失效路径（不存在，或指向系统临时目录），就改回默认的
+    错题集 / 图片（都在程序自己所在目录下），并顺手把目录建出来。
+    这样换台电脑、或 settings.json 里残留了别的机器的路径时，
+    不会出现「输出目录指向一个不存在的临时文件夹」这种莫名其妙的状况。
+    """
+    base = paths.data_dir()
+    changed = []
+    for key, folder in (("out_dir", "错题集"), ("images_root", "图片")):
+        cur = (getattr(s, key) or "").strip()
+        drop = False
+        if not cur or _is_temp_path(cur):
+            drop = True                                  # 空值 / 自动化测试留下的临时路径
+        elif not os.path.isdir(cur):
+            parent = os.path.dirname(os.path.abspath(cur))
+            if os.path.isdir(parent):
+                # 父目录还在（用户新建的目录或还没建）→ 直接建出来，不动设置
+                try:
+                    os.makedirs(cur, exist_ok=True)
+                except OSError:
+                    drop = True
+            else:
+                drop = True                              # 换机/盘符不存在 → 拉回默认
+        if drop:
+            setattr(s, key, os.path.join(base, folder))
+            changed.append(key)
+    for key in ("out_dir", "images_root"):
+        p = getattr(s, key)
+        if p:
+            try:
+                os.makedirs(p, exist_ok=True)            # 首次启动就把目录建好
+            except OSError:
+                pass
+    return s, changed
+
+
 def load_settings() -> M.Settings:
     global _settings
     if os.path.exists(SETTINGS_PATH):
@@ -56,6 +104,9 @@ def load_settings() -> M.Settings:
                 _settings = M.Settings(**json.load(f))
         except (OSError, ValueError):
             pass
+    _settings, changed = _sanitize_settings(_settings)
+    if changed:
+        save_settings(_settings)                        # 自愈：把修正后的路径写回配置
     return _settings
 
 

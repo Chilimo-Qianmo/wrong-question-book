@@ -529,12 +529,11 @@ def detect_questions(layout, config: dict | None = None, progress=None):
                 for x in figures
             ):
                 continue
-            if not item.get("url") and not item.get("path"):
-                bb = item.get("bbox") or []
-                if len(bb) >= 4 and layout.path:
-                    # 旧版本配置里只存了坐标，这里补上按区域裁剪的地址，
-                    # 否则前端拿不到图片会显示「配图暂不可预览」。
-                    item["url"] = _crop_url(layout, int(item.get("page") or 1), bb)
+            # 只要有坐标，就补上「按区域裁剪原卷」的地址，并让它优先显示：
+            # 配置文件里记录的图片路径可能已经不存在（换机/清理过），
+            # 直接用文件路径会变成破图，从原卷现场裁一张永远都在。
+            if not item.get("url") and len(bb) >= 4 and layout.path:
+                item["url"] = _crop_url(layout, int(item.get("page") or 1), bb)
             if item.get("url") or item.get("path"):
                 figures.append(item)
             else:
