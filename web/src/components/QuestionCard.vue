@@ -122,7 +122,13 @@ function absorb(d: DroppedText, index: number) {
       <label class="flabel">配图（{{ q.figures.length }} 张）</label>
       <div class="figs">
         <figure v-for="(f, i) in q.figures" :key="f.id || i" class="fig">
-          <img :src="mediaUrl(f.url || f.path)" :alt="'配图 ' + (i + 1)" loading="lazy" />
+          <img
+            v-if="f.url || f.path"
+            :src="mediaUrl(f.url || f.path)"
+            :alt="'配图 ' + (i + 1)"
+            loading="lazy"
+          />
+          <div v-else class="noimg">配图暂不可预览（第 {{ f.page }} 页）</div>
           <figcaption class="figmeta">
             第 {{ f.page }} 页<template v-if="f.auto"> · 自动抽取</template>
           </figcaption>

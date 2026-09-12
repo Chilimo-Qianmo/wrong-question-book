@@ -131,22 +131,41 @@ def layout_for(pdf: str, out_dir: str | None = None, scale: float = 3.0, use_cac
 
 def export_figures(pdf: str, images_root: str, out_dir: str | None = None,
                    scale: float = 3.0, questions=None, progress=None) -> dict:
-    """把版面里的插图归属到题并导出到 图片/<题号>/。返回 {qno: [文件名...]}"""
+    """把版面里的插图归属到题，图片**平铺**写进 images_root。
+
+    返回 {题号: [文件名, ...]}，调用方再用 image_store.assign() 记录分配关系。
+    （旧版按 图片/<题号>/ 建子目录，现在统一平铺，用户不需要手工建文件夹。）
+    """
     from app.core.lines import build_lines
+    os.makedirs(images_root, exist_ok=True)
     info, lay = layout_for(pdf, out_dir, scale, True, progress)
     lines = build_lines(lay.boxes)
     notes = []
     qs, gaps, declared = recognize.group_questions(lines, notes)
     spans = recognize.question_spans(qs, lay)
-    assign = assign_to_questions(lay.figures, spans)
+    # 与识别保持一致：先排除误检表格，再对与表格重叠的图去重
+    good = [t for t in lay.tables if not t.invalid_reason()]
+    figs = []
+    for f in lay.figures:
+        fa = max(1.0, (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+        dup = False
+        for t in good:
+            if t.page != f.page:
+                continue
+            ox = min(f.bbox[2], t.bbox[2]) - max(f.bbox[0], t.bbox[0])
+            oy = min(f.bbox[3], t.bbox[3]) - max(f.bbox[1], t.bbox[1])
+            if ox > 0 and oy > 0 and (ox * oy) / fa > 0.6:
+                dup = True
+                break
+        if not dup:
+            figs.append(f)
+    assign = assign_to_questions(figs, spans)
     result = {}
-    for qno, figs in sorted(assign.items()):
-        qdir = os.path.join(images_root, str(qno))
-        os.makedirs(qdir, exist_ok=True)
+    for qno, flist in sorted(assign.items()):
         names = []
-        for k, f in enumerate(figs, 1):
-            name = "auto_p%d_%d.png" % (f.page, k)
-            dst = os.path.join(qdir, name)
+        for k, f in enumerate(flist, 1):
+            name = "自动抽取_第%d题_%d.png" % (qno, k)
+            dst = os.path.join(images_root, name)
             ok = None
             if f.page in lay.render_paths:
                 # 渲染图是 scale 倍 72dpi，写入 DPI 后 Word 里即可按原图尺寸插入

@@ -114,13 +114,23 @@ export const api = {
     post<{ path: string; folder: string }>('/api/config/save', { config, exam, out_dir: outDir }),
   configLoad: (path: string) => post<QuestionConfig>('/api/config/load', { path }),
 
-  /* 配图 */
+  /* 配图（平铺图片库 + 分配清单） */
+  imagesLibrary: (imagesRoot: string) =>
+    post<{
+      root: string
+      files: ImageFile[]
+      assign: Record<string, string[]>
+      counts: Record<string, number>
+      notes: string[]
+    }>('/api/images/library', { images_root: imagesRoot }),
   imagesList: (imagesRoot: string, qno: number) =>
     post<{ files: ImageFile[] }>('/api/images/list', { images_root: imagesRoot, qno }),
   imagesAssign: (imagesRoot: string, qno: number, paths: string[]) =>
     post<{ files: ImageFile[] }>('/api/images/assign', { images_root: imagesRoot, qno, paths }),
-  imagesDelete: (imagesRoot: string, qno: number, names: string[]) =>
-    post<{ files: ImageFile[] }>('/api/images/delete', { images_root: imagesRoot, qno, names }),
+  imagesUnassign: (imagesRoot: string, qno: number, names: string[]) =>
+    post<{ files: ImageFile[] }>('/api/images/unassign', { images_root: imagesRoot, qno, names }),
+  imagesDelete: (imagesRoot: string, names: string[]) =>
+    post<{ files: ImageFile[] }>('/api/images/delete', { images_root: imagesRoot, names }),
   imagesAutofill: (pdf: string, imagesRoot: string, questions: QuestionOut[]) =>
     post<{ assigned: Record<string, string[]> }>('/api/images/autofill', {
       pdf,

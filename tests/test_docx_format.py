@@ -6,7 +6,7 @@
   2) 页眉 = 学生姓名（居中）
   3) 页眉上边距 / 页脚下边距 = 0.8cm
   4) 页脚 = 居中页码（PAGE 域，显示 1、2、3）
-  5) 选项缩进 2 个字符；题目（题干）不缩进
+  5) 题干与选项均首行缩进 2 个字符
   6) 字体宋体、正文 5 号（10.5pt）
   7) 行距 1.1
   8) 段前段后间距 0
@@ -100,7 +100,7 @@ def main() -> int:
         elif not t.endswith("错题集") and "错题题号" not in t and "·" not in t:
             stems.append(p)
 
-    check("题干段落不缩进", all((indent_chars(p) in (None, 0)) for p in stems),
+    check("题干首行缩进 2 个字符", stems and all(indent_chars(p) == 2.0 for p in stems),
           "实测 %s" % [indent_chars(p) for p in stems])
     check("选项缩进 2 个字符", options and all(indent_chars(p) == 2.0 for p in options),
           "实测 %s" % [indent_chars(p) for p in options])

@@ -142,6 +142,8 @@ class Settings(BaseModel):
     body_size: float = 10.5
     line_spacing: float = 1.1
     page_margin_cm: float = 1.27
+    image_width_ratio: float = 0.6      # 配图最大宽度 = 正文宽度 × 该比例
+    image_dpi_fallback: float = 144.0   # 图片无 DPI 信息时按此 DPI 估算原图尺寸
 
 
 class GenerateRequest(BaseModel):

@@ -52,9 +52,11 @@ LAYOUT = {
     # natural=True 时按图片自身的物理尺寸（像素 ÷ DPI）插入，尽量与原图一致；
     # image_width_in / image_max_height_in 只作为上限，超出才等比缩小，不放大。
     "image_natural": True,
-    "image_width_in": 6.0,          # 宽度上限（英寸）
+    "image_width_in": 6.0,          # 宽度上限（英寸，绝对上限）
+    "image_width_ratio": 0.6,       # 宽度上限 = 正文宽度 × 该比例（默认 60%）
     "image_max_height_in": 9.2,     # 高度上限（英寸），防止单图超出一页
-    "image_dpi_fallback": 96.0,     # 图片未带 DPI 信息时的兜底 DPI
+    "image_dpi_fallback": 144.0,    # 图片未带 DPI 信息时的兜底 DPI（截图通常 1.5~2 倍）
+    "text_width_in": 7.27,          # 正文可用宽度（A4 - 左右各 1.27cm）
 }
 
 SUBTITLE_SIZE = 9
@@ -225,8 +227,12 @@ def image_display_size(path, layout=None):
     except Exception:                                   # noqa: BLE001
         pass
 
-    fallback = float(L.get("image_dpi_fallback") or 96.0)
+    fallback = float(L.get("image_dpi_fallback") or 144.0)
+    text_w = float(L.get("text_width_in") or 7.27)
+    ratio = float(L.get("image_width_ratio") or 0)
     max_w = float(L.get("image_width_in") or 6.0)
+    if ratio > 0:
+        max_w = min(max_w, text_w * ratio)      # 图片最多占正文宽度的 ratio
     max_h = float(L.get("image_max_height_in") or 9.2)
 
     if not L.get("image_natural", True) or not w_px or not h_px:
@@ -419,8 +425,8 @@ def add_question_section(doc, qno, q, images_root=None, answers=None, layout=Non
 
     add_heading(doc, "第 %s 题" % qno, layout=layout)
 
-    # 题干（不加缩进）
-    add_body(doc, str(stem).strip(), layout=layout)
+    # 题干：首行缩进 2 字符（与选项的悬挂缩进一致）
+    add_body(doc, str(stem).strip(), first_line_chars=2, layout=layout)
 
     # as_answer=False 的表格：题干之后、选项之前
     for spec in [t for t in tlist if not t["as_answer"]]:
@@ -501,8 +507,8 @@ def build_student_docx(name, wrong_qnos, qmap, images_root, exam_title, out_dir,
     st.element.rPr.rFonts.set(qn("w:eastAsia"), L["font_name"])
     st.font.size = Pt(L["body_size"])
 
-    add_title(doc, "%s 错题集" % name, layout=layout)
-    add_subtitle(doc, "%s · 选择题错题整理" % (exam_title or ""), layout=layout)
+    # 标题只要「错题集」三个字；学生姓名放在页眉，不重复出现在正文标题里
+    add_title(doc, "错题集", layout=layout)
     wrong_str = "、".join(str(w) for w in wrong) if wrong else "无"
     add_body(doc, "错题题号：%s（共 %d 道）" % (wrong_str, len(wrong)), layout=layout)
     _fmt_para(doc.add_paragraph(), layout=layout)

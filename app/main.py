@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from app import models as M
 from app.jobs import JOBS, start, sweep
 from app.core import engine, archive, excel as xl, docx_build, merge_docx, cache as cache_mod
+from app.core import image_store as store, regions
 from app.core.figures import assign_to_questions, crop_from_page, crop_from_image
 
 VERSION = "2.0.1"
@@ -227,38 +228,13 @@ def media_region(pdf: str = Query(...), page: int = Query(1),
     space='render' 时坐标是渲染图像素，按 scale 换算回 PDF 点再裁切。
     结果落盘缓存，同一区域只渲染一次。
     """
-    import hashlib
-    import pdfplumber
-
-    ap = os.path.abspath(pdf)
-    if not os.path.exists(ap) or not ap.lower().endswith(".pdf"):
-        raise HTTPException(400, "不是有效的 PDF 路径")
-    s = float(scale or 1.0)
-    if space == "render" and s > 0.01:
-        x0, y0, x1, y1 = x0 / s, y0 / s, x1 / s, y1 / s
-    if x1 <= x0 or y1 <= y0:
-        raise HTTPException(400, "区域无效")
-    dpi = max(72, min(400, int(dpi or 150)))
-
     cache_dir, _render = engine.work_dirs(load_settings().out_dir)
-    key = "%s|%d|%.1f|%.1f|%.1f|%.1f|%d" % (
-        cache_mod.fingerprint(ap), page, x0, y0, x1, y1, dpi)
-    fp = os.path.join(cache_dir, "crop", hashlib.sha1(key.encode()).hexdigest()[:20] + ".png")
-    if not os.path.exists(fp):
-        os.makedirs(os.path.dirname(fp), exist_ok=True)
-        try:
-            with pdfplumber.open(ap) as doc:
-                if page < 1 or page > len(doc.pages):
-                    raise HTTPException(400, "页码超出范围")
-                pg = doc.pages[page - 1]
-                bbox = (max(0.0, x0), max(0.0, y0),
-                        min(float(pg.width), x1), min(float(pg.height), y1))
-                img = pg.crop(bbox).to_image(resolution=dpi)
-                img.save(fp)                        # PageImage.save() 已按 resolution 写入 DPI
-        except HTTPException:
-            raise
-        except Exception as e:                          # noqa: BLE001
-            raise HTTPException(500, "裁切失败：%s" % e)
+    try:
+        fp = regions.crop_region(pdf, page, [x0, y0, x1, y1], space, scale, dpi, cache_dir)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:                              # noqa: BLE001
+        raise HTTPException(500, "裁切失败：%s" % e)
     return FileResponse(fp, media_type="image/png",
                         headers={"Cache-Control": "public, max-age=3600"})
 
@@ -301,66 +277,72 @@ def config_save(payload: dict):
 # 图片
 # --------------------------------------------------------------------------- #
 def _images_list(images_root: str, qno: int) -> list:
-    d = os.path.join(images_root, str(qno))
-    if not os.path.isdir(d):
-        return []
-    out = []
-    for name in sorted(os.listdir(d)):
-        if not name.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp")):
-            continue
-        fp = os.path.join(d, name)
-        out.append({"name": name, "path": fp, "size": os.path.getsize(fp),
-                    "url": "/api/media?path=" + fp.replace("\\", "/")})
-    return out
+    """某题已分配的图片（平铺结构，取自分配清单）。"""
+    return store.assigned_info(images_root, qno)
+
+
+@app.post("/api/images/library")
+def images_library(payload: dict):
+    """图片库全貌：平铺目录里的所有图片 + 每题分配情况。"""
+    root = (payload or {}).get("images_root") or load_settings().images_root
+    notes = store.migrate_legacy(root)            # 旧的 图片/<题号>/ 自动迁移
+    assign = store.load_assign(root)
+    counts = {k: len([n for n in v if os.path.isfile(os.path.join(root, n))])
+              for k, v in assign.items()}
+    return {"root": root, "files": store.library(root), "assign": assign,
+            "counts": counts, "notes": notes}
 
 
 @app.post("/api/images/list")
 def images_list(payload: dict):
     root = (payload or {}).get("images_root") or load_settings().images_root
-    return {"files": _images_list(root, int((payload or {}).get("qno") or 1))}
+    qno = int((payload or {}).get("qno") or 1)
+    store.migrate_legacy(root)
+    return {"files": store.assigned_info(root, qno)}
 
 
 @app.post("/api/images/assign")
 def images_assign(payload: dict):
-    import shutil
+    """把图片分配给某题：可传图片库里的文件名，也可传外部绝对路径（会复制进来）。"""
     root = (payload or {}).get("images_root") or load_settings().images_root
     qno = int((payload or {}).get("qno") or 1)
-    d = os.path.join(root, str(qno))
-    os.makedirs(d, exist_ok=True)
-    for p in (payload or {}).get("paths") or []:
-        if os.path.exists(p):
-            try:
-                shutil.copy2(p, os.path.join(d, os.path.basename(p)))
-            except OSError:
-                pass
-    return {"files": _images_list(root, qno)}
+    items = (payload or {}).get("paths") or (payload or {}).get("names") or []
+    return {"files": store.assign(root, qno, items)}
+
+
+@app.post("/api/images/unassign")
+def images_unassign(payload: dict):
+    """只把图片从该题移出，不删除文件。"""
+    root = (payload or {}).get("images_root") or load_settings().images_root
+    qno = int((payload or {}).get("qno") or 1)
+    return {"files": store.unassign(root, qno, (payload or {}).get("names") or [])}
 
 
 @app.post("/api/images/delete")
 def images_delete(payload: dict):
+    """彻底删除图片文件（并从所有题目移除）。"""
     root = (payload or {}).get("images_root") or load_settings().images_root
-    qno = int((payload or {}).get("qno") or 1)
-    d = os.path.join(root, str(qno))
-    for name in (payload or {}).get("names") or []:
-        fp = os.path.join(d, os.path.basename(name))
-        try:
-            if os.path.isfile(fp):
-                os.remove(fp)
-        except OSError:
-            pass
-    return {"files": _images_list(root, qno)}
+    store.delete_files(root, (payload or {}).get("names") or [])
+    return {"files": store.library(root)}
 
 
 @app.post("/api/images/autofill")
 def images_autofill(payload: dict):
+    """从 PDF 自动抽取配图，平铺写入图片库并自动分配到对应题号。"""
     pdf = (payload or {}).get("pdf") or ""
     root = (payload or {}).get("images_root") or load_settings().images_root
     if not pdf or not os.path.exists(pdf):
         raise HTTPException(400, "PDF 不存在")
     os.makedirs(root, exist_ok=True)
-    assigned = engine.export_figures(pdf, root, load_settings().out_dir)
-    return {"assigned": assigned,
-            "counts": {str(k): len(v) for k, v in assigned.items()}}
+    store.migrate_legacy(root)
+    found = engine.export_figures(pdf, root, load_settings().out_dir)
+    for qno, names in found.items():
+        store.assign(root, qno, names)
+    assign = store.load_assign(root)
+    return {"assigned": found,
+            "counts": {str(k): len(v) for k, v in found.items()},
+            "library_count": len(store.library(root)),
+            "assign_counts": {k: len(v) for k, v in assign.items()}}
 
 
 # --------------------------------------------------------------------------- #
@@ -395,7 +377,16 @@ def jobs_detect(req: M.DetectRequest):
         job.log("识别完成：%d 题，用时 %.1fs" % (len(payload.questions), payload.elapsed_ms / 1000.0))
         for g in payload.gaps:
             job.log(g.message, "warn")
-        return payload.model_dump()
+        out = payload.model_dump()
+        # 后台预热「原题区域」图片：核对页打开即可显示，不用一张张等渲染
+        try:
+            import threading as _th
+            _th.Thread(target=regions.warm,
+                       args=(req.pdf, out.get("questions"), req.out_dir or load_settings().out_dir),
+                       daemon=True).start()
+        except Exception:                               # noqa: BLE001
+            pass
+        return out
     job = start("detect", work)
     return {"job_id": job.id}
 
@@ -405,9 +396,9 @@ def _qmap_from_questions(questions, images_root: str) -> dict:
     for q in questions:
         qn = int(q["qno"])
         figs = [f.get("path") for f in (q.get("figures") or []) if f.get("path")]
-        for f in _images_list(images_root, qn):
-            if f["path"] not in figs:
-                figs.append(f["path"])
+        for fp in store.assigned_files(images_root, qn):     # 平铺图片库里分配给本题的图
+            if fp not in figs:
+                figs.append(fp)
         qmap[qn] = {
             "stem": q.get("stem") or "",
             "options": {k: v for k, v in (q.get("options") or {}).items() if v},
@@ -461,9 +452,19 @@ def jobs_generate(req: M.GenerateRequest):
 
         job.progress("生成 Word 文档", 2, 4)
         title = req.title or (eff.source_exam or "模拟测试")
+        # 把「⑥ 设置」里的版式与配图尺寸（含最大宽度比例）传给文档生成
+        layout = {
+            "font_name": s.font_name,
+            "body_size": s.body_size,
+            "line_spacing": s.line_spacing,
+            "page_margin_cm": s.page_margin_cm,
+            "image_width_ratio": s.image_width_ratio,
+            "image_dpi_fallback": s.image_dpi_fallback,
+        }
         count = 0
         for name in sorted(wrongs):
-            docx_build.build_student_docx(name, wrongs[name], qmap, images_root, title, out_dir)
+            docx_build.build_student_docx(name, wrongs[name], qmap, images_root, title, out_dir,
+                                          layout=layout)
             count += 1
             job.log("生成：错题集_%s.docx（错题 %d 道）" % (name, len(wrongs[name])))
         job.progress("归档与清理", 3, 4)

@@ -218,6 +218,41 @@ def split_question(lines):
     return stem, options, letters
 
 
+def _crop_url(layout, page: int, bbox, dpi: int = 150) -> str:
+    """把「版面坐标」转成前端的区域裁剪地址（与右侧原题区域同一套坐标系）。"""
+    try:
+        from urllib.parse import urlencode
+        is_pdf = layout.page_kind.get(page, "scanned") == "digital"
+        q = {
+            "pdf": layout.path, "page": page,
+            "x0": round(bbox[0], 1), "y0": round(bbox[1], 1),
+            "x1": round(bbox[2], 1), "y1": round(bbox[3], 1),
+            "space": "pdf" if is_pdf else "render",
+            "scale": 1.0 if is_pdf else float(layout.scale or 1.0),
+            "dpi": dpi,
+        }
+        return "/api/media/region?" + urlencode(q)
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+class _FakeBox:
+    """把一个「被否决的表格」伪装成文本块，复用 dropped 展示通道。"""
+
+    def __init__(self, text, page, y0, y1, x0, x1, reason):
+        self.text = text
+        self.page = page
+        self.y0, self.y1, self.x0, self.x1 = y0, y1, x0, x1
+        self.absent = reason
+
+    @property
+    def cy(self):
+        return (self.y0 + self.y1) / 2.0
+
+    def bbox(self):
+        return [self.x0, self.y0, self.x1, self.y1]
+
+
 def question_regions(questions, layout) -> dict:
     """计算每道题在原始试卷上的区域（供核对页右侧显示「原题区域」）。
 
@@ -297,9 +332,34 @@ def detect_questions(layout, config: dict | None = None, progress=None):
     spans = question_spans(questions, layout)
     regions = question_regions(questions, layout)
 
-    fig_assign = assign_to_questions(layout.figures, spans) if layout.figures else {}
-    tbl_assign, drop_assign = {}, {}
+    # 先筛掉误检表格（答题卡编号条、空表等），再与配图去重：
+    # 同一块内容如果既是「表格」又被当成「配图」，只保留表格，避免题里插两遍。
+    good_tables, bad_tables = [], []
     for t in layout.tables:
+        reason = t.invalid_reason()
+        if reason:
+            bad_tables.append((t, reason))
+        else:
+            good_tables.append(t)
+
+    figures = []
+    for f in layout.figures:
+        dup = None
+        fa = max(1.0, (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+        for t in good_tables:
+            if t.page != f.page:
+                continue
+            ox = min(f.bbox[2], t.bbox[2]) - max(f.bbox[0], t.bbox[0])
+            oy = min(f.bbox[3], t.bbox[3]) - max(f.bbox[1], t.bbox[1])
+            if ox > 0 and oy > 0 and (ox * oy) / fa > 0.6:
+                dup = t
+                break
+        if dup is None:
+            figures.append(f)
+
+    fig_assign = assign_to_questions(figures, spans) if figures else {}
+    tbl_assign, drop_assign = {}, {}
+    for t in good_tables:
         cy = (t.bbox[1] + t.bbox[3]) / 2.0
         for qno, sp in spans.items():
             if any(p == t.page and y0 - 6 <= cy <= y1 + 6 for (p, y0, y1) in sp):
@@ -309,6 +369,15 @@ def detect_questions(layout, config: dict | None = None, progress=None):
         for qno, sp in spans.items():
             if any(p == b.page and y0 - 6 <= b.cy <= y1 + 6 for (p, y0, y1) in sp):
                 drop_assign.setdefault(qno, []).append(b)
+                break
+    for t, reason in bad_tables:                       # 误检表格：不进题目，但要看得见
+        cy = (t.bbox[1] + t.bbox[3]) / 2.0
+        for qno, sp in spans.items():
+            if any(p == t.page and y0 - 6 <= cy <= y1 + 6 for (p, y0, y1) in sp):
+                drop_assign.setdefault(qno, []).append(_FakeBox(
+                    text="[疑似误检的表格] %s" % (t.cells[0] if t.cells else ""),
+                    page=t.page, y0=t.bbox[1], y1=t.bbox[3],
+                    x0=t.bbox[0], x1=t.bbox[2], reason=reason))
                 break
 
     cfg = config or {}
@@ -335,8 +404,11 @@ def detect_questions(layout, config: dict | None = None, progress=None):
                            "bbox": list(t.bbox), "cells": t.cells, "source": t.source,
                            "as_answer": (not options) and bool(spec), "spec": spec or None})
         for f in fig_assign.get(qno, []):
+            # 检测到的配图还没有落到磁盘，直接用 /api/media/region 按区域裁给前端显示，
+            # 否则前端拿到 url/path 都是空，配图位置会显示成破图。
             figures.append({"id": "f%d_%s" % (f.page, int(f.bbox[1])), "page": f.page,
-                            "bbox": list(f.bbox), "path": f.path, "url": None, "auto": True,
+                            "bbox": list(f.bbox), "path": f.path,
+                            "url": _crop_url(layout, f.page, f.bbox), "auto": True,
                             "width": f.width, "height": f.height})
 
         if cfg_stems.get(str(qno)):

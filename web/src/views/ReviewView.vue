@@ -13,9 +13,8 @@ import { useSourceStore } from '@/stores/source'
 import { useUiStore } from '@/stores/ui'
 import { baseName, layoutKindText, msText } from '@/utils/format'
 
-// ② 题目核对：两栏布局
-//   左栏（占 2/3）：识别概览 + 逐题卡片（原有全部功能）
-//   右栏（占 1/3）：当前题在原始试卷上的区域，方便逐字对照
+// ② 题目核对：**每道题一行**，左侧 2/3 是题目编辑卡片，右侧 1/3 紧挨着显示
+//    该题在原始试卷上的区域，两边自动对齐；右侧图片随窗口宽度自适应缩放。
 
 const route = useRoute()
 const router = useRouter()
@@ -27,10 +26,9 @@ const ui = useUiStore()
 const stream = ref<JobStream | null>(null)
 const flashIndex = ref(-1)
 const currentIndex = ref(0)
-const zoom = ref(1)
-const failed = ref<Record<string, boolean>>({})
+const failed = ref<Record<number, boolean>>({})
+const retry = ref<Record<number, number>>({})
 
-/** 任务 id：来自 ① 页，或 URL 上的 ?job=（刷新后仍可继续跟踪） */
 const jobId = computed(() => source.detectJobId || String(route.query.job || ''))
 const task = computed(() => job.tasks.detect)
 const running = computed(() => task.value.running)
@@ -38,14 +36,12 @@ const running = computed(() => task.value.running)
 const info = computed(() => review.sourceInfo || source.sourceInfo)
 const channelText = computed(() => (info.value ? layoutKindText(info.value.kind) : '—'))
 const unverified = computed(() => review.total - review.verifiedCount)
-const current = computed(() => review.questions[currentIndex.value] || null)
-const currentRegions = computed<RegionOut[]>(() => current.value?.regions || [])
 const pdfPath = computed(() => info.value?.path || source.pdf || '')
 
-/** 题目区域裁剪地址（后端按区域渲染原卷） */
-function regionUrl(reg: RegionOut): string {
+/** 题目区域裁剪地址（后端按区域渲染原卷；窗口变宽时浏览器会自动拉伸这张图） */
+function regionUrl(reg: RegionOut | undefined): string {
   const p = pdfPath.value
-  if (!p || !reg.bbox || reg.bbox.length < 4) return ''
+  if (!p || !reg || !reg.bbox || reg.bbox.length < 4) return ''
   const q = new URLSearchParams({
     pdf: p,
     page: String(reg.page || 1),
@@ -55,24 +51,36 @@ function regionUrl(reg: RegionOut): string {
     y1: String(reg.bbox[3]),
     space: reg.space || 'pdf',
     scale: String(reg.scale || 1),
-    dpi: '170',
+    dpi: '150',                       // 与后端预热用的 DPI 一致，直接命中缓存
+    r: String(retry.value[reg.page] || 0),
   })
   return '/api/media/region?' + q.toString()
 }
 
-function setCurrent(i: number) {
-  currentIndex.value = i
-  zoom.value = 1
-  failed.value = {}
+/** 图片加载失败：自动重试 2 次（首次打开时后端可能还在渲染），再不成功才提示 */
+function onRegionError(qno: number, page: number) {
+  const n = (retry.value[page] || 0) + 1
+  if (n <= 2) {
+    retry.value = { ...retry.value, [page]: n }
+  } else {
+    failed.value = { ...failed.value, [qno]: true }
+  }
+}
+
+function primaryRegion(q: { regions?: RegionOut[] }): RegionOut | undefined {
+  return q.regions && q.regions.length ? q.regions[0] : undefined
 }
 
 function openBig(url: string) {
   if (url) window.open(url, '_blank')
 }
 
+function setCurrent(i: number) {
+  currentIndex.value = i
+}
+
 onMounted(async () => {
   if (!jobId.value) return
-  // 先取一次任务状态：跳转瞬间可能已经错过了 SSE 事件
   try {
     const st = await api.jobStatus(jobId.value)
     if (st.result) review.applyPayload(st.result as unknown as DetectPayload)
@@ -89,13 +97,11 @@ onMounted(async () => {
       return
     }
   } catch (e) {
-    // 后端不可用：不白屏，只提示，并继续尝试订阅事件流
     job.pushText('detect', errText(e), 'error')
   }
   follow()
 })
 
-// 题目出来后，默认定位到第一道「需关注」的题，便于优先核对
 watch(
   () => review.questions.length,
   (n) => {
@@ -105,7 +111,6 @@ watch(
   },
 )
 
-/** 订阅识别任务事件流 */
 function follow() {
   if (!jobId.value) return
   stream.value = subscribeJob(jobId.value, {
@@ -125,7 +130,6 @@ function follow() {
 }
 
 onUnmounted(() => {
-  // 组件卸载时关闭事件流
   stream.value?.close()
   stream.value = null
 })
@@ -134,7 +138,7 @@ function scrollToQuestion(index: number) {
   const q = review.questions[index]
   if (!q) return
   setCurrent(index)
-  const el = document.getElementById('q-' + q.qno)
+  const el = document.getElementById('qrow-' + q.qno)
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
   flashIndex.value = index
   window.setTimeout(() => {
@@ -151,7 +155,6 @@ function unverifyAll() {
   review.setAllVerified(false)
 }
 
-/** 确认核验并生成：未勾选时定位到第一道未核对题 */
 function confirmGenerate() {
   if (!review.total) {
     ui.notify('还没有题目可以生成', 'warn')
@@ -191,127 +194,85 @@ async function cancelDetect() {
       </div>
     </div>
 
-    <div class="split">
-      <!-- ============ 左栏：原有全部功能（2/3） ============ -->
-      <div class="col-left">
-        <section class="card">
-          <div class="card-head">
-            <h2>识别概览</h2>
-            <div class="row">
-              <button v-if="running" class="btn mini danger" @click="cancelDetect">取消识别</button>
-              <RouterLink class="btn mini" to="/">重新选择来源</RouterLink>
-            </div>
-          </div>
+    <!-- 识别概览 -->
+    <section class="card">
+      <div class="card-head">
+        <h2>识别概览</h2>
+        <div class="row">
+          <button v-if="running" class="btn mini danger" @click="cancelDetect">取消识别</button>
+          <RouterLink class="btn mini" to="/">重新选择来源</RouterLink>
+        </div>
+      </div>
 
-          <div class="kv">
-            <div class="item"><span class="k">识别题数</span><span class="v">{{ review.total }} 题</span></div>
-            <div class="item">
-              <span class="k">声明题数</span>
-              <span class="v">{{ review.declaredCount === null ? '—' : review.declaredCount + ' 题' }}</span>
-            </div>
-            <div class="item"><span class="k">用时</span><span class="v">{{ msText(review.elapsedMs) }}</span></div>
-            <div class="item"><span class="k">来源通道</span><span class="v">{{ channelText }}</span></div>
-            <div class="item">
-              <span class="k">来源文件</span>
-              <span class="v small" :title="info?.path || ''">{{ info?.name || baseName(source.pdf) || '—' }}</span>
-            </div>
-            <div class="item"><span class="k">需关注题目</span><span class="v">{{ review.issueCount }} 题</span></div>
-          </div>
+      <div class="kv">
+        <div class="item"><span class="k">识别题数</span><span class="v">{{ review.total }} 题</span></div>
+        <div class="item">
+          <span class="k">声明题数</span>
+          <span class="v">{{ review.declaredCount === null ? '—' : review.declaredCount + ' 题' }}</span>
+        </div>
+        <div class="item"><span class="k">用时</span><span class="v">{{ msText(review.elapsedMs) }}</span></div>
+        <div class="item"><span class="k">来源通道</span><span class="v">{{ channelText }}</span></div>
+        <div class="item">
+          <span class="k">来源文件</span>
+          <span class="v small" :title="info?.path || ''">{{ info?.name || baseName(source.pdf) || '—' }}</span>
+        </div>
+        <div class="item"><span class="k">需关注题目</span><span class="v">{{ review.issueCount }} 题</span></div>
+      </div>
 
-          <div v-if="running" class="running">
-            <ProgressBar :percent="task.percent" label="正在识别" :stage="task.stage" />
-            <div class="muted">{{ task.message || '正在解析试卷…' }}</div>
-          </div>
+      <div v-if="running" class="running">
+        <ProgressBar :percent="task.percent" label="正在识别" :stage="task.stage" />
+        <div class="muted">{{ task.message || '正在解析试卷…' }}</div>
+      </div>
 
-          <div v-if="task.error" class="banner error">
-            <div><strong>识别失败：</strong>{{ task.error }}</div>
-          </div>
-          <div v-else-if="task.state === 'cancelled'" class="banner warn">识别任务已取消。</div>
-        </section>
+      <div v-if="task.error" class="banner error">
+        <div><strong>识别失败：</strong>{{ task.error }}</div>
+      </div>
+      <div v-else-if="task.state === 'cancelled'" class="banner warn">识别任务已取消。</div>
+    </section>
 
+    <!-- 每道题一行：左 2/3 编辑区，右 1/3 原题区域（自动对齐） -->
+    <div v-if="review.total" class="review-grid">
+      <template v-for="(q, i) in review.questions" :key="q.qno">
         <div
-          v-for="(q, i) in review.questions"
-          :key="q.qno"
-          class="qwrap"
-          :class="{ active: i === currentIndex }"
+          :id="'qrow-' + q.qno"
+          class="cell-card"
+          :class="{ active: i === currentIndex, flashing: flashIndex === i }"
           @click="setCurrent(i)"
         >
           <QuestionCard :q="q" :index="i" :flashing="flashIndex === i" />
         </div>
 
-        <EmptyHint
-          v-if="!review.total && !running"
-          title="还没有识别结果"
-          text="请到「① 选择来源」选好试卷后点击「开始识别」，识别完成后题目会出现在这里。"
-        >
-          <button class="btn primary" @click="router.push('/')">去选择来源</button>
-        </EmptyHint>
-      </div>
-
-      <!-- ============ 右栏：当前题的原题区域（1/3） ============ -->
-      <aside class="col-right">
-        <section class="card region-card">
-          <div class="card-head">
-            <h2>
-              <template v-if="current">第 {{ current.qno }} 题 · 原题区域</template>
-              <template v-else>原题区域</template>
-            </h2>
+        <aside class="cell-region">
+          <div class="region-head">
+            <span class="badge">第 {{ q.qno }} 题 · 原题区域</span>
+            <button
+              v-if="primaryRegion(q)"
+              class="btn mini ghost"
+              @click.stop="openBig(regionUrl(primaryRegion(q)))"
+            >放大</button>
           </div>
-
-          <template v-if="current">
-            <div class="toolbar">
-              <button class="btn mini" @click="zoom = Math.max(0.5, zoom - 0.25)" title="缩小">－</button>
-              <span class="zoomv">{{ Math.round(zoom * 100) }}%</span>
-              <button class="btn mini" @click="zoom = Math.min(3, zoom + 0.25)" title="放大">＋</button>
-              <button class="btn mini" @click="zoom = 1">适应宽度</button>
-              <span class="spacer"></span>
-              <button
-                v-if="currentRegions.length"
-                class="btn mini ghost"
-                @click="openBig(regionUrl(currentRegions[0]))"
-              >在新窗口打开</button>
-            </div>
-
-            <div v-if="!currentRegions.length" class="empty-region">
-              这道题没有原题区域（题目来自题目配置，或未在试卷中定位到）。
-              <br />可在左侧直接核对题干与选项。
-            </div>
-            <div v-else-if="!pdfPath" class="empty-region">
-              当前来源不是试卷 PDF，无法显示原题区域。
-            </div>
-            <div v-else class="region-scroll">
-              <template v-for="(reg, ri) in currentRegions" :key="ri">
-                <img
-                  v-if="!failed[ri]"
-                  class="region-img"
-                  :src="regionUrl(reg)"
-                  :style="{ width: zoom * 100 + '%' }"
-                  alt="原题区域"
-                  @error="failed[ri] = true"
-                />
-                <div v-else class="empty-region">第 {{ reg.page }} 页区域加载失败，请重试。</div>
-              </template>
-            </div>
-
-            <div class="region-foot">
-              <span v-if="currentRegions.length" class="muted small">
-                第 {{ currentRegions[0].page }} 页 · 直接裁自原卷
-              </span>
-              <span class="spacer"></span>
-              <span class="badge" :class="current.conf >= 0.9 ? 'ok' : 'warn'">
-                置信度 {{ Math.round(current.conf * 100) }}%
-              </span>
-            </div>
-          </template>
-
-          <EmptyHint
-            v-else
-            title="尚未选择题目"
-            text="点击左侧任意题目卡片，这里会显示该题在原始试卷上的位置，方便逐字对照。"
+          <img
+            v-if="primaryRegion(q) && pdfPath && !failed[q.qno]"
+            class="region-img"
+            :src="regionUrl(primaryRegion(q))"
+            :alt="'第' + q.qno + '题原题区域'"
+            loading="lazy"
+            @error="onRegionError(q.qno, primaryRegion(q)!.page)"
           />
-        </section>
-      </aside>
+          <div v-else-if="failed[q.qno]" class="empty-region">原题区域加载失败</div>
+          <div v-else-if="!pdfPath" class="empty-region">来源不是试卷 PDF，无法显示原题区域</div>
+          <div v-else class="empty-region">这道题没有定位到原题区域（题目来自题目配置）</div>
+        </aside>
+      </template>
     </div>
+
+    <EmptyHint
+      v-if="!review.total && !running"
+      title="还没有识别结果"
+      text="请到「① 选择来源」选好试卷后点击「开始识别」，识别完成后题目会出现在这里。"
+    >
+      <button class="btn primary" @click="router.push('/')">去选择来源</button>
+    </EmptyHint>
   </div>
 
   <!-- 底部操作栏 -->
@@ -349,88 +310,68 @@ async function cancelDetect() {
   color: var(--c-green);
 }
 
-/* ===== 两栏布局：左 2/3，右 1/3 ===== */
-.split {
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
+/* ===== 每题一行：左 2/3 + 右 1/3，天然对齐 ===== */
+.review-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 14px 16px;
+  align-items: start;
 }
-.col-left {
-  flex: 2 1 0;
+.cell-card {
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.col-right {
-  flex: 1 1 0;
-  min-width: 300px;
-  position: sticky;
-  top: 12px;
-}
-.qwrap {
   border-radius: var(--r-lg);
   transition: box-shadow 0.15s ease;
+  cursor: default;
 }
-.qwrap.active {
+.cell-card.active {
   box-shadow: 0 0 0 2px var(--c-primary-soft);
 }
+.cell-card.flashing {
+  animation: cardflash 0.45s ease-in-out 3;
+}
+@keyframes cardflash {
+  0%, 100% { background: transparent; }
+  50% { background: var(--c-primary-soft); }
+}
 
-/* ===== 右栏：原题区域 ===== */
-.region-card {
+.cell-region {
+  min-width: 0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.zoomv {
-  font-size: 12px;
-  color: var(--c-text-3);
-  min-width: 40px;
-  text-align: center;
-}
-.region-scroll {
-  max-height: 62vh;
-  overflow: auto;
-  border: 1px solid var(--c-border);
-  border-radius: var(--r-md);
-  background: var(--c-surface-2);
-  padding: 6px;
-}
-.region-img {
-  display: block;
-  max-width: none;
-  border-radius: 4px;
-  background: #fff;
-}
-.empty-region {
-  padding: 22px 12px;
-  text-align: center;
-  color: var(--c-text-3);
-  font-size: 13px;
-  line-height: 1.7;
-  background: var(--c-surface-2);
-  border-radius: var(--r-md);
-}
-.region-foot {
+.region-head {
   display: flex;
   align-items: center;
   gap: 8px;
 }
+/* 图片宽度 100%：窗口拉伸时跟着变宽，高度按原图比例自动；不设高度上限 */
+.region-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+  border: 1px solid var(--c-border);
+  background: #fff;
+}
+.empty-region {
+  padding: 18px 10px;
+  text-align: center;
+  color: var(--c-text-3);
+  font-size: 12px;
+  background: var(--c-surface-2);
+  border-radius: var(--r-sm);
+}
 
-/* 窄屏（如 1366 或窗口很小时）自动改为上下布局，避免右栏被挤没 */
+/* 窄屏（如窗口很小时）自动改为上下布局，避免右侧被挤没 */
 @media (max-width: 1100px) {
-  .split {
-    flex-direction: column;
-  }
-  .col-right {
-    position: static;
-    width: 100%;
-    min-width: 0;
+  .review-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>
