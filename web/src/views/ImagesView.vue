@@ -1,23 +1,22 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, errText, mediaUrl } from '@/api'
 import type { ImageFile, QuestionOut, RegionOut } from '@/api/types'
 import EmptyHint from '@/components/EmptyHint.vue'
 import PickerButton from '@/components/PickerButton.vue'
-import RegionPane from '@/components/RegionPane.vue'
+import RegionPopup, { type PopAnchor } from '@/components/RegionPopup.vue'
 import { useReviewStore } from '@/stores/review'
 import { useSettingsStore } from '@/stores/settings'
 import { useSourceStore } from '@/stores/source'
 import { useUiStore } from '@/stores/ui'
 import { sizeText } from '@/utils/format'
 
-// ③ 题目配图（与「② 题目核对」完全相同的分栏逻辑）
-//   · 每一道题占一行：**左侧**是题目本身 + 拖放区（把图片拖进来即可配图），
-//     **右侧**是这道题在原始试卷上的裁剪原图，鼠标悬停出现放大镜。
-//   · 图片素材库平铺在页面顶部的横向条里，拖到左边任意题目上即可；
-//     也支持「点一下图片选中 → 点一下题目」的两步操作，方便不习惯拖拽的老师。
-//   · 「从 PDF 自动抽取配图」抽出来的图会自动落到对应题目；
-//     换一份试卷重新抽取时，会先清掉上一份试卷自动抽取的旧图（不会留残影）。
+// ③ 题目配图
+//   · 顶部是「配图参数设置」（图片根目录、图片库统计、自动抽取等）
+//   · 下方分两栏：**左栏 = 图片素材库**（平铺图片，可拖），
+//     **右栏 = 每个题目的配图格**（把左栏图片拖到题目上即可配图）。
+//   · 鼠标移到某题的选项框上时，会在该题**上方**浮出一块画面，
+//     显示这道题在原始试卷上的原图切割画面（移开即收起），方便边看原图边配图。
 
 const settings = useSettingsStore()
 const review = useReviewStore()
@@ -36,6 +35,8 @@ const preview = ref<ImageFile | null>(null)
 const dragging = ref('')
 const picked = ref('')
 const dragOverQno = ref(0)
+/** 原题切割画面的悬浮预览（跟随鼠标所在的题目格） */
+const pop = ref<PopAnchor | null>(null)
 
 /** 有识别结果就按识别到的题号逐题显示；否则用「已分配过的题号 + 1~20」兜底 */
 const slots = computed(() => {
@@ -50,6 +51,14 @@ const slots = computed(() => {
     .map((n) => ({ qno: n, stem: '', regions: [] as RegionOut[] }))
 })
 
+const regionMap = computed(() => {
+  const m: Record<number, RegionOut[]> = {}
+  slots.value.forEach((s) => {
+    m[s.qno] = s.regions
+  })
+  return m
+})
+const popRegions = computed(() => (pop.value ? regionMap.value[pop.value.qno] || [] : []))
 const pdfPath = computed(() => review.sourceInfo?.path || source.pdf || '')
 const assignedTotal = computed(() =>
   Object.values(assignMap.value).reduce((s, list) => s + (list || []).length, 0),
@@ -69,13 +78,39 @@ function filesOf(qno: number): ImageFile[] {
 
 function stemPreview(q: { stem: string }): string {
   const t = (q.stem || '').replace(/\s+/g, ' ').trim()
-  return t.length > 90 ? t.slice(0, 90) + '…' : t
+  return t.length > 80 ? t.slice(0, 80) + '…' : t
+}
+
+/* ===== 原题切割画面：鼠标悬停在题目选项框上时浮出 ===== */
+function onZoneEnter(qno: number, ev: MouseEvent) {
+  if (dragging.value) return                       // 拖拽时不弹，避免挡住落点
+  const el = ev.currentTarget as HTMLElement
+  const r = el.getBoundingClientRect()
+  const width = Math.max(340, Math.min(r.width + 60, 760))
+  let left = r.left + (r.width - width) / 2
+  left = Math.max(8, Math.min(left, window.innerWidth - width - 8))
+  // 默认浮在题目前方（上方）；只有贴着屏幕顶部放不下时，组件内部会自动翻到下方
+  pop.value = { qno, top: r.top, bottom: r.bottom, left, width, up: true }
+}
+
+function onZoneLeave() {
+  pop.value = null
+}
+
+/** 页面滚动后悬浮画面的位置就失效了，直接收起 */
+function onScroll() {
+  if (pop.value) pop.value = null
 }
 
 onMounted(async () => {
   if (!settings.loaded) await settings.load()
   imagesRoot.value = settings.settings.images_root || ''
+  window.addEventListener('scroll', onScroll, true)
   await refresh()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('scroll', onScroll, true)
 })
 
 watch(imagesRoot, (v) => {
@@ -119,8 +154,9 @@ function onDragStart(name: string, ev: DragEvent) {
 function onDrop(qno: number) {
   const name = dragging.value || picked.value
   dragOverQno.value = 0
+  dragging.value = ''
   if (!name) {
-    ui.notify('请先把上方素材库里的图片拖过来，或先点选一张图片', 'warn')
+    ui.notify('请先把左栏素材库里的图片拖过来，或先点选一张图片', 'warn')
     return
   }
   void assignTo(qno, [name])
@@ -136,6 +172,7 @@ async function assignTo(qno: number, names: string[]) {
     })
     m[String(qno)] = cur
     assignMap.value = m
+    pop.value = null
     ui.notify('已把 ' + names.length + ' 张图片配到第 ' + qno + ' 题', 'success')
   } catch (e) {
     ui.notify(errText(e), 'error')
@@ -236,12 +273,12 @@ async function autofill() {
 
 <template>
   <div class="page">
-    <!-- 工具条 -->
+    <!-- 配图参数设置 -->
     <section class="card">
       <div class="card-head">
         <h2>
-          题目配图
-          <span class="sub">左侧题目 + 拖放区，右侧裁切原图；把素材库里的图拖到题目上即可</span>
+          配图参数设置
+          <span class="sub">左栏是图片素材库，拖到右栏任意题目上即可配图</span>
         </h2>
         <button class="btn primary" :disabled="autofillRunning || !source.pdf" @click="autofill">
           <span v-if="autofillRunning" class="spinner"></span>
@@ -291,88 +328,93 @@ async function autofill() {
       <div v-if="error" class="banner error"><div>{{ error }}</div></div>
     </section>
 
-    <!-- 图片素材库：横向条，拖到下面的题目上即可 -->
-    <section class="card">
-      <div class="card-head">
-        <h2>
-          图片素材库
+    <!-- 两栏：左=图片素材库，右=每个题目的配图格 -->
+    <div class="split">
+      <section class="card col-lib">
+        <div class="card-head">
+          <h2>图片素材库</h2>
           <span class="sub">
-            {{ picked ? '已选中「' + picked + '」，点题目即可配图' : '按住图片拖到下面任意题目上' }}
+            {{ picked ? '已选中「' + picked + '」' : '拖拽或点选图片' }}
           </span>
-        </h2>
-      </div>
-      <EmptyHint
-        v-if="!library.length && !loading"
-        title="图片库还是空的"
-        text="点上方「添加图片…」从电脑里选图，或点「从 PDF 自动抽取配图」自动生成。"
-      />
-      <div v-else class="libstrip">
-        <figure
-          v-for="f in library"
-          :key="f.name"
-          class="libcard"
-          :class="{ picked: picked === f.name }"
-          draggable="true"
-          @dragstart="onDragStart(f.name, $event)"
-          @dragend="dragging = ''"
-          @click="picked = f.name"
-        >
-          <img :src="mediaUrl(f.url || f.path)" :alt="f.name" loading="lazy" />
-          <figcaption>
-            <span class="fname" :title="f.name">{{ f.name }}</span>
-            <span class="rowmini">
-              <span v-if="f.auto" class="tag">自动</span>
-              <span class="muted small">{{ sizeText(f.size) }}</span>
+        </div>
+        <EmptyHint
+          v-if="!library.length && !loading"
+          title="图片库还是空的"
+          text="点上方「添加图片…」从电脑里选图，或点「从 PDF 自动抽取配图」自动生成。"
+        />
+        <div v-else class="libgrid">
+          <figure
+            v-for="f in library"
+            :key="f.name"
+            class="libcard"
+            :class="{ picked: picked === f.name }"
+            draggable="true"
+            @dragstart="onDragStart(f.name, $event)"
+            @dragend="dragging = ''"
+            @click="picked = f.name"
+          >
+            <img :src="mediaUrl(f.url || f.path)" :alt="f.name" loading="lazy" />
+            <figcaption>
+              <span class="fname" :title="f.name">{{ f.name }}</span>
+              <span class="rowmini">
+                <span v-if="f.auto" class="tag">自动</span>
+                <span class="muted small">{{ sizeText(f.size) }}</span>
+                <span class="spacer"></span>
+                <button class="btn mini" @click.stop="preview = f">看</button>
+                <button class="btn mini danger" @click.stop="deleteImage(f)">删</button>
+              </span>
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="col-slots">
+        <div class="qlist">
+          <div
+            v-for="s in slots"
+            :key="s.qno"
+            class="qslot"
+            :class="{ over: dragOverQno === s.qno, has: filesOf(s.qno).length > 0 }"
+          >
+            <div class="qslot-head">
+              <span class="qno">第 {{ s.qno }} 题</span>
+              <span class="cnt" :class="{ zero: !filesOf(s.qno).length }">
+                {{ filesOf(s.qno).length }} 张
+              </span>
               <span class="spacer"></span>
-              <button class="btn mini" @click.stop="preview = f">看</button>
-              <button class="btn mini danger" @click.stop="deleteImage(f)">删</button>
-            </span>
-          </figcaption>
-        </figure>
-      </div>
-    </section>
+              <button
+                v-if="filesOf(s.qno).length"
+                class="btn mini ghost"
+                @click.stop="clearQno(s.qno)"
+              >清空本题</button>
+            </div>
 
-    <!-- 每题一行：左=题目与拖放区，右=裁剪原图（与核对页同一套逻辑） -->
-    <div class="pair-grid">
-      <template v-for="q in slots" :key="q.qno">
-        <div
-          class="qslot"
-          :class="{ over: dragOverQno === q.qno, has: filesOf(q.qno).length > 0 }"
-          @dragover.prevent="dragOverQno = q.qno"
-          @dragleave="dragOverQno = 0"
-          @drop.prevent="onDrop(q.qno)"
-          @click="onDrop(q.qno)"
-        >
-          <div class="qslot-head">
-            <span class="qno">第 {{ q.qno }} 题</span>
-            <span class="cnt" :class="{ zero: !filesOf(q.qno).length }">{{ filesOf(q.qno).length }} 张</span>
-            <span class="spacer"></span>
-            <button
-              v-if="filesOf(q.qno).length"
-              class="btn mini ghost"
-              @click.stop="clearQno(q.qno)"
-            >清空本题</button>
-          </div>
+            <div v-if="s.stem" class="stem-prev">{{ stemPreview(s) }}</div>
 
-          <div v-if="q.stem" class="stem-prev">{{ stemPreview(q) }}</div>
-
-          <div class="dropzone" :class="{ empty: !filesOf(q.qno).length }">
-            <template v-if="filesOf(q.qno).length">
-              <figure v-for="f in filesOf(q.qno)" :key="f.name" class="thumb">
-                <img :src="mediaUrl(f.url || f.path)" :alt="f.name" loading="lazy"
-                     @click.stop="preview = f" />
-                <button class="rm" title="移出本题" @click.stop="unassign(q.qno, f.name)">×</button>
-              </figure>
-            </template>
-            <span v-else class="droptip">
-              {{ picked ? '点这里把「' + picked + '」配到第 ' + q.qno + ' 题' : '把图片拖到这里' }}
-            </span>
+            <div
+              class="dropzone"
+              :class="{ empty: !filesOf(s.qno).length }"
+              @dragover.prevent="dragOverQno = s.qno"
+              @dragleave="dragOverQno = 0"
+              @drop.prevent="onDrop(s.qno)"
+              @mouseenter="onZoneEnter(s.qno, $event)"
+              @mouseleave="onZoneLeave"
+              @click="onDrop(s.qno)"
+            >
+              <template v-if="filesOf(s.qno).length">
+                <figure v-for="f in filesOf(s.qno)" :key="f.name" class="thumb">
+                  <img :src="mediaUrl(f.url || f.path)" :alt="f.name" loading="lazy"
+                       @click.stop="preview = f" />
+                  <button class="rm" title="移出本题" @click.stop="unassign(s.qno, f.name)">×</button>
+                </figure>
+              </template>
+              <span v-else class="droptip">
+                {{ picked ? '点这里把「' + picked + '」配到第 ' + s.qno + ' 题' : '把图片拖到这里' }}
+              </span>
+            </div>
           </div>
         </div>
-
-        <!-- 裁剪原图 + 悬停放大镜（与「② 题目核对」共用 RegionPane） -->
-        <RegionPane :qno="q.qno" :regions="q.regions" :pdf="pdfPath" />
-      </template>
+      </section>
     </div>
 
     <!-- 底部：下一步 -->
@@ -384,6 +426,9 @@ async function autofill() {
       <RouterLink class="btn" to="/review">返回题目核对</RouterLink>
       <RouterLink class="btn primary lg" to="/generate">下一步：生成 →</RouterLink>
     </div>
+
+    <!-- 悬停在题目选项框上时，在该题上方浮出「原题切割画面」 -->
+    <RegionPopup v-if="pop" :anchor="pop" :regions="popRegions" :pdf="pdfPath" />
 
     <!-- 大图预览 -->
     <div v-if="preview" class="lightbox" @click="preview = null">
@@ -416,17 +461,26 @@ async function autofill() {
   font-size: 12px;
 }
 
-/* ===== 素材库（横向条） ===== */
-.libstrip {
-  display: flex;
+/* ===== 两栏：左素材库（窄、固定） + 右题目格（自适应） ===== */
+.split {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.col-lib {
+  position: sticky;
+  top: 8px;
+}
+.libgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 10px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding-bottom: 6px;
+  max-height: calc(100vh - 260px);
+  overflow: auto;
+  padding-right: 4px;
 }
 .libcard {
-  flex: none;
-  width: 152px;
   margin: 0;
   border: 1px solid var(--c-border);
   border-radius: var(--r-md);
@@ -441,7 +495,7 @@ async function autofill() {
 .libcard img {
   display: block;
   width: 100%;
-  height: 104px;
+  height: 96px;
   object-fit: contain;
   background: var(--c-surface-2);
 }
@@ -471,11 +525,11 @@ async function autofill() {
   background: var(--c-primary-soft);
 }
 
-/* ===== 每题一行：左=题目与拖放区，右=裁剪原图 ===== */
-.pair-grid {
+/* ===== 右栏：每个题目的配图格 ===== */
+.qlist {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px 16px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
   align-items: start;
 }
 .qslot {
@@ -489,7 +543,6 @@ async function autofill() {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  cursor: pointer;
   transition: border-color 0.12s ease, background 0.12s ease;
   scroll-margin-top: 80px;
 }
@@ -538,6 +591,7 @@ async function autofill() {
   padding: 8px;
   align-items: center;
   justify-content: center;
+  cursor: pointer;
 }
 .dropzone.empty {
   color: var(--c-text-3);
@@ -619,8 +673,14 @@ async function autofill() {
 }
 
 @media (max-width: 1200px) {
-  .pair-grid {
+  .split {
     grid-template-columns: 1fr;
+  }
+  .col-lib {
+    position: static;
+  }
+  .libgrid {
+    max-height: 320px;
   }
 }
 </style>

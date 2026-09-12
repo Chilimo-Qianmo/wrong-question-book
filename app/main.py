@@ -24,7 +24,7 @@ from app.core import image_store as store, regions
 from app import paths
 from app.core.figures import assign_to_questions, crop_from_page, crop_from_image
 
-VERSION = "2.3.4"
+VERSION = "2.3.5"
 
 
 def _bundle_dir() -> str:

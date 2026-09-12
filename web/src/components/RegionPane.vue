@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import type { RegionOut } from '@/api/types'
+import { useRegionImage } from '@/utils/region'
 
-// 「原题区域」面板：核对页与配图页共用同一套逻辑 —— 后端按题目区域裁切原卷，
+// 「原题区域」内嵌面板：核对页右侧用它 —— 后端按题目区域裁切原卷，
 // 鼠标悬停时在图片下方弹出放大镜，点「放大」开弹层看高清大图。
-// 两个页面用同一个组件，行为与样式永远一致（改一处两页同步）。
+// （配图页的悬浮预览用 RegionPopup，两边共用 utils/region 的取图逻辑。）
 
 const props = defineProps<{
   qno: number
@@ -13,61 +14,12 @@ const props = defineProps<{
   pdf: string
 }>()
 
-const failed = ref(false)
-const retry = ref(0)
-const regionError = ref('')
-const lightbox = ref('')
-
-const primary = computed<RegionOut | undefined>(() =>
-  props.regions && props.regions.length ? props.regions[0] : undefined,
+const { primary, url, src, failed, detail, onError, retryNow } = useRegionImage(
+  () => props.pdf,
+  () => props.regions,
 )
 
-/** 区域裁剪地址（后端按区域渲染原卷；窗口变宽时浏览器会自动拉伸这张图） */
-function regionUrl(dpi = 150): string {
-  const reg = primary.value
-  if (!props.pdf || !reg || !reg.bbox || reg.bbox.length < 4) return ''
-  const q = new URLSearchParams({
-    pdf: props.pdf,
-    page: String(reg.page || 1),
-    x0: String(reg.bbox[0]),
-    y0: String(reg.bbox[1]),
-    x1: String(reg.bbox[2]),
-    y1: String(reg.bbox[3]),
-    space: reg.space || 'pdf',
-    scale: String(reg.scale || 1),
-    dpi: String(dpi),
-    r: String(retry.value),
-  })
-  return '/api/media/region?' + q.toString()
-}
-
-const url = computed(() => (failed.value ? '' : regionUrl(150)))
-
-/** 图片加载失败：先自动重试（后端可能正在渲染），仍失败就取回真实原因显示出来 */
-async function onError() {
-  const n = retry.value + 1
-  if (n <= 3) {
-    retry.value = n
-    return
-  }
-  let detail = '未知错误'
-  try {
-    const r = await fetch(regionUrl(150))
-    const t = await r.text()
-    detail = 'HTTP ' + r.status + ' ' + t.slice(0, 300)
-  } catch (e) {
-    detail = String(e)
-  }
-  regionError.value = detail
-  failed.value = true
-}
-
-/** 手动重试 */
-function retryRegion() {
-  failed.value = false
-  regionError.value = ''
-  retry.value += 1
-}
+const lightbox = ref('')
 
 /* ===== 悬停放大镜 ===== */
 const MAG_W = 320
@@ -93,7 +45,7 @@ function onMove(ev: MouseEvent) {
     mag.value = null
     return
   }
-  const hi = regionUrl(300)              // 放大镜读高清版（服务端缓存，首次稍慢）
+  const hi = url(300)                    // 放大镜读高清版（服务端缓存，首次稍慢）
   if (!hi) return
   // 小窗默认贴在图片下方，并做视口边界收敛，避免超出屏幕
   let left = r.left + (r.width - MAG_W) / 2
@@ -108,7 +60,7 @@ function onLeave() {
 }
 
 function openLightbox() {
-  lightbox.value = regionUrl(300)
+  lightbox.value = url(300)
 }
 
 function openInNewTab() {
@@ -126,7 +78,7 @@ function openInNewTab() {
     <img
       v-if="primary && pdf && !failed"
       class="region-img"
-      :src="url"
+      :src="src"
       :alt="'第' + qno + '题原题区域'"
       loading="lazy"
       @error="onError"
@@ -135,8 +87,8 @@ function openInNewTab() {
     />
     <div v-else-if="failed" class="empty-region err">
       <div>原题区域加载失败</div>
-      <div class="errdetail">{{ regionError || '未知错误' }}</div>
-      <button class="btn mini" @click="retryRegion">重试</button>
+      <div class="errdetail">{{ detail || '未知错误' }}</div>
+      <button class="btn mini" @click="retryNow">重试</button>
     </div>
     <div v-else-if="!pdf" class="empty-region">来源不是试卷 PDF，无法显示原题区域</div>
     <div v-else class="empty-region">这道题没有定位到原题区域（题目来自题目配置）</div>
