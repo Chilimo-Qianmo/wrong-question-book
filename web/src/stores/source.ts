@@ -44,6 +44,8 @@ export const useSourceStore = defineStore('source', () => {
 
   const excelPeek = ref<ExcelPeek | null>(null)
   const peeking = ref(false)
+  /** 最近一次解析过的 Excel 路径：用于判断「是否换了一份表」 */
+  const lastPeekedExcel = ref('')
   const excelError = ref('')
 
   /** 最近一次识别任务 id，供核对页订阅 */
@@ -109,18 +111,22 @@ export const useSourceStore = defineStore('source', () => {
     }
   }
 
-  /** 答题表预览：POST /api/excel/peek */
+  /** 答题表预览：POST /api/excel/peek
+   *  换了一份 Excel 就重新推断班级并自动刷新（同一份点「重新解析」时保留手填的班级）。
+   */
   async function peekExcel() {
     if (!excel.value) return
     peeking.value = true
     excelError.value = ''
     try {
-      excelPeek.value = await api.excelPeek(excel.value)
-      // 后端推断出班级时，若用户还没填班级则自动带上
-      if (!className.value && excelPeek.value.class_name) {
-        className.value = excelPeek.value.class_name
+      const peeked = await api.excelPeek(excel.value)
+      excelPeek.value = peeked
+      const switched = lastPeekedExcel.value !== excel.value   // 换表了
+      if (peeked.class_name && (switched || !className.value)) {
+        className.value = peeked.class_name
         persist()
       }
+      lastPeekedExcel.value = excel.value
     } catch (e) {
       excelPeek.value = null
       excelError.value = errText(e)
@@ -128,6 +134,8 @@ export const useSourceStore = defineStore('source', () => {
       peeking.value = false
     }
   }
+
+
 
   /** 后端 settings 里的默认值，仅在本地为空时套用 */
   function applySettingsDefaults(s: Settings) {

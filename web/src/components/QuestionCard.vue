@@ -105,7 +105,7 @@ function removeFigure(index: number) {
   props.q.figures.splice(index, 1)
 }
 
-/* ===== 表格 ===== */
+/* ===== 表格（v2.3.3 起不再在本卡片出现，保留函数以兼容旧数据） ===== */
 function tableSourceText(source: string): string {
   if (source === 'structured') return '结构化表格'
   if (source === 'manual') return '手工指定'
@@ -194,33 +194,8 @@ function absorb(d: DroppedText, index: number) {
       </div>
     </div>
 
-    <div v-if="(q.tables || []).length" class="field">
-      <label class="flabel">表格（{{ q.tables.length }} 个）</label>
-      <div class="tables">
-        <div v-for="(t, i) in q.tables" :key="t.id || i" class="tblbox">
-          <div class="tblhead">
-            <span class="muted">第 {{ t.page }} 页 · {{ tableSourceText(t.source) }}</span>
-            <label class="check small">
-              <input v-model="t.as_answer" type="checkbox" />
-              作为答案表格
-            </label>
-          </div>
-          <div v-if="(t.cells || []).length" class="tbl-wrap">
-            <table class="tbl">
-              <tbody>
-                <tr v-for="(row, ri) in t.cells" :key="ri">
-                  <td v-for="(cell, ci) in row" :key="ci">{{ cell }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <img v-else-if="t.image_url" class="tblimg" :src="mediaUrl(t.image_url)" alt="表格预览" />
-          <div v-else class="muted">
-            该表格没有可预览的单元格（区域坐标 {{ (t.bbox || []).map((n) => Math.round(n)).join(', ') }}）
-          </div>
-        </div>
-      </div>
-    </div>
+    <!-- v2.3.3：表格不再单独识别与插入；卷面上的表格会出现在上面的「配图」里，
+         需要的话到「③ 题目配图」把它拖到本题即可 -->
 
     <div v-if="(q.warnings || []).length" class="warns">
       <div v-for="(w, i) in q.warnings" :key="i" class="banner warn">⚠ {{ w }}</div>

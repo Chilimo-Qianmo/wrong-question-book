@@ -427,39 +427,36 @@ def detect_questions(layout, config: dict | None = None, progress=None):
     spans = question_spans(questions, layout)
     regions = question_regions(questions, layout)
 
-    # 先筛掉误检表格（答题卡编号条、空表等），再与配图去重：
-    # 同一块内容如果既是「表格」又被当成「配图」，只保留表格，避免题里插两遍。
-    good_tables, bad_tables = [], []
+    # v2.3.3：不再自动识别/插入表格。
+    # 表格区域仍然会被检出，但只用于「把表格里的文字排除在题干之外」，
+    # 然后整块当作**图片候选**交给用户，由用户自行决定要不要插进错题集。
+    from app.core.layout import FigureRegion
+    table_regions = []
     for t in layout.tables:
-        reason = t.invalid_reason()
-        if reason:
-            bad_tables.append((t, reason))
-        else:
-            good_tables.append(t)
+        if not t.invalid_reason():                     # 误检的（答题卡编号条等）直接忽略
+            table_regions.append(t)
 
     figures = []
     for f in layout.figures:
-        dup = None
+        dup = False
         fa = max(1.0, (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
-        for t in good_tables:
+        for t in table_regions:
             if t.page != f.page:
                 continue
             ox = min(f.bbox[2], t.bbox[2]) - max(f.bbox[0], t.bbox[0])
             oy = min(f.bbox[3], t.bbox[3]) - max(f.bbox[1], t.bbox[1])
             if ox > 0 and oy > 0 and (ox * oy) / fa > 0.6:
-                dup = t
+                dup = True                             # 与表格重叠的图不再重复列一遍
                 break
-        if dup is None:
+        if not dup:
             figures.append(f)
+    for t in table_regions:                            # 表格 → 图片候选
+        figures.append(FigureRegion(page=t.page, bbox=t.bbox))
+    figures.sort(key=lambda x: (x.page, x.bbox[1]))
 
     fig_assign = assign_to_questions(figures, spans) if figures else {}
-    tbl_assign, drop_assign = {}, {}
-    for t in good_tables:
-        cy = (t.bbox[1] + t.bbox[3]) / 2.0
-        for qno, sp in spans.items():
-            if any(p == t.page and y0 - 6 <= cy <= y1 + 6 for (p, y0, y1) in sp):
-                tbl_assign.setdefault(qno, []).append(t)
-                break
+    drop_assign = {}
+    bad_tables = [(t, t.invalid_reason()) for t in layout.tables if t.invalid_reason()]
     for b in layout.dropped:
         for qno, sp in spans.items():
             if any(p == b.page and y0 - 6 <= b.cy <= y1 + 6 for (p, y0, y1) in sp):
@@ -492,12 +489,8 @@ def detect_questions(layout, config: dict | None = None, progress=None):
         for b in drop_assign.get(qno, []):
             dropped.append({"text": b.text, "page": b.page, "bbox": b.bbox(), "reason": b.absent})
 
+        # v2.3.3：题目不再携带结构化表格，表格区域已并入「配图候选」
         tables, figures = [], []
-        for t in tbl_assign.get(qno, []):
-            spec = t.as_spec(as_answer=(not options))
-            tables.append({"id": "t%d_%s" % (t.page, int(t.bbox[1])), "page": t.page,
-                           "bbox": list(t.bbox), "cells": t.cells, "source": t.source,
-                           "as_answer": (not options) and bool(spec), "spec": spec or None})
         for f in fig_assign.get(qno, []):
             # 检测到的配图还没有落到磁盘，直接用 /api/media/region 按区域裁给前端显示，
             # 否则前端拿到 url/path 都是空，配图位置会显示成破图。
@@ -512,7 +505,7 @@ def detect_questions(layout, config: dict | None = None, progress=None):
         if cfg_opts.get(str(qno)):
             options = dict(cfg_opts[str(qno)])
             src = "config" if src == "text" else "mixed"
-        if cfg_tables.get(str(qno)):
+        if False and cfg_tables.get(str(qno)):      # v2.3.3：配置里的表格也不再自动插入
             tables = [{"id": "cfg_%s" % qno, "page": 0, "bbox": [], "cells": None,
                        "source": "manual",
                        "as_answer": bool(cfg_tables[str(qno)].get("as_answer")),

@@ -180,6 +180,7 @@ export interface MergeResult {
   copied: number
   outs: string[]
   logs: string[]
+  root?: string
 }
 
 export interface JobStatus {

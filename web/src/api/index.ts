@@ -105,6 +105,14 @@ export const api = {
   jobsDetect: (req: DetectRequest) => post<{ job_id: string }>('/api/jobs/detect', req),
   jobsGenerate: (req: GenerateRequest) => post<{ job_id: string }>('/api/jobs/generate', req),
   jobsMerge: (req: MergeRequest) => post<{ job_id: string }>('/api/jobs/merge', req),
+  mergePreview: (folders: string[], outDir: string) =>
+    post<{
+      root: string
+      root_name: string
+      total_docs: number
+      folder_count: number
+      groups: { cls: string; folders: string[]; docs: number; out_dir: string }[]
+    }>('/api/merge/preview', { folders, out_dir: outDir }),
   jobStatus: (id: string) => get<JobStatus>('/api/jobs/' + encodeURIComponent(id)),
   jobCancel: (id: string) => post<{ ok: boolean }>('/api/jobs/' + encodeURIComponent(id) + '/cancel'),
   jobEventsUrl: (id: string) => '/api/jobs/' + encodeURIComponent(id) + '/events',

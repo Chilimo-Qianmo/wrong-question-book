@@ -417,35 +417,29 @@ def question_parts(q, tables=None, qno=None):
 
 
 # --------------------------------------------------------------------------- #
-# 一道错题的版式：题号 -> 题干 -> 非答案表格 -> 图片 -> 选项/答案表格 -> 标准答案
+# 一道错题的版式：题号 -> 题干 -> 图片 -> 选项 -> 标准答案
+# v2.3.3：不再自动插入表格（识别到的表格只作为「图片候选」交给用户自行选择）
 # --------------------------------------------------------------------------- #
 def add_question_section(doc, qno, q, images_root=None, answers=None, layout=None,
                          tables=None):
-    stem, options, tlist, figures = question_parts(q, tables=tables, qno=qno)
+    stem, options, _tlist, figures = question_parts(q, tables=tables, qno=qno)
 
     add_heading(doc, "第 %s 题" % qno, layout=layout)
 
     # 题干：首行缩进 2 字符（与选项的悬挂缩进一致）
     add_body(doc, str(stem).strip(), first_line_chars=2, layout=layout)
 
-    # as_answer=False 的表格：题干之后、选项之前
-    for spec in [t for t in tlist if not t["as_answer"]]:
-        add_table(doc, spec, layout=layout)
-
     # 图片：优先 qmap[qno]["figures"] 的绝对路径；为空回退 images_root/题号/
     imgs = figures or find_question_images(images_root, qno)
     if imgs:
         insert_images(doc, imgs, layout=layout)
 
-    # 答案位：有选项则输出选项（缩进 2 字符，按字母排序），否则输出 as_answer 表格
+    # 选项（缩进 2 字符，按字母排序）
     if options:
         for letter in sorted(options):
             text = options[letter]
             if text:
                 add_option(doc, "%s. %s" % (letter, text), layout=layout)
-    else:
-        for spec in [t for t in tlist if t["as_answer"]]:
-            add_table(doc, spec, layout=layout)
 
     if answers:
         ans = answers.get(str(qno))

@@ -27,9 +27,19 @@ const task = computed(() => job.tasks.merge)
 const result = computed(() => (task.value.result || null) as MergeResult | null)
 const running = computed(() => task.value.running)
 
+/** 合并前预览：按班级分组、每组文档数、实际输出目录 */
+const preview = ref<{
+  root: string
+  root_name: string
+  total_docs: number
+  folder_count: number
+  groups: { cls: string; folders: string[]; docs: number; out_dir: string }[]
+} | null>(null)
+const previewing = ref(false)
+
 onMounted(async () => {
   if (!settings.loaded) await settings.load()
-  if (!outDir.value) outDir.value = settings.settings.out_dir || ''
+  // 合并功能是独立的：输出目录留空时后端会用程序目录下的「错题集合并」
 })
 
 onUnmounted(() => {
@@ -37,27 +47,42 @@ onUnmounted(() => {
   stream.value = null
 })
 
+async function refreshPreview() {
+  if (!folders.value.length) {
+    preview.value = null
+    return
+  }
+  previewing.value = true
+  try {
+    preview.value = await api.mergePreview(folders.value.slice(), outDir.value)
+  } catch (e) {
+    preview.value = null
+    ui.notify(errText(e), 'warn')
+  } finally {
+    previewing.value = false
+  }
+}
+
 function addFolders(paths: string[]) {
   paths.forEach((p) => {
     if (p && !folders.value.includes(p)) folders.value.push(p)
   })
+  void refreshPreview()
 }
 
 function removeFolder(index: number) {
   folders.value.splice(index, 1)
+  void refreshPreview()
 }
 
 function clearFolders() {
   folders.value = []
+  preview.value = null
 }
 
 async function start() {
   if (!folders.value.length) {
     ui.notify('请先添加至少一个错题集文件夹', 'warn')
-    return
-  }
-  if (!outDir.value) {
-    ui.notify('请先填写合并输出目录', 'warn')
     return
   }
   stream.value?.close()
@@ -156,10 +181,15 @@ async function openFolder(path: string) {
           </label>
         </div>
         <div class="field">
-          <label class="flabel">输出目录</label>
+          <label class="flabel">
+            输出根目录
+            <span class="tip">（留空则自动使用程序目录下的「{{ preview?.root_name || '错题集合并' }}」）</span>
+          </label>
           <div class="row">
-            <input v-model="outDir" type="text" placeholder="例如 D:\合并结果" />
-            <PickerButton kind="dir" label="浏览…" @picked="(paths) => { if (paths.length) outDir = paths[0] }" />
+            <input v-model="outDir" type="text" placeholder="留空 = 程序目录下的「错题集合并」"
+                   @change="refreshPreview" />
+            <PickerButton kind="dir" label="浏览…"
+                          @picked="(paths) => { if (paths.length) { outDir = paths[0]; refreshPreview() } }" />
           </div>
         </div>
       </div>
@@ -169,8 +199,34 @@ async function openFolder(path: string) {
           <span v-if="running" class="spinner"></span>
           {{ running ? '正在合并…' : '开始合并' }}
         </button>
+        <button class="btn" :disabled="!folders.length || previewing" @click="refreshPreview">
+          {{ previewing ? '分析中…' : '重新分析' }}
+        </button>
         <button v-if="running" class="btn danger" @click="cancel">取消任务</button>
       </div>
+    </section>
+
+    <!-- 合并前预览：按班级分组，确认无误再合并 -->
+    <section v-if="preview" class="card">
+      <div class="card-head">
+        <h2>
+          按班级分组预览
+          <span class="sub">合并结果会分别保存到「输出根目录 / 班级」下</span>
+        </h2>
+        <span class="badge">{{ preview.total_docs }} 份文档</span>
+      </div>
+      <div class="muted small rootline">
+        输出根目录：<span class="mono">{{ preview.root }}</span>
+        <button class="btn mini" @click="openFolder(preview.root)">打开</button>
+      </div>
+      <ul class="groups">
+        <li v-for="(g, i) in preview.groups" :key="i">
+          <span class="badge blue">{{ g.cls }}</span>
+          <span class="muted small">{{ g.folders.length }} 个文件夹 · {{ g.docs }} 份文档</span>
+          <span class="spacer"></span>
+          <span class="mono ellip" :title="g.out_dir">{{ g.out_dir }}</span>
+        </li>
+      </ul>
     </section>
 
     <section v-if="running || task.logs.length" class="card">
@@ -188,6 +244,10 @@ async function openFolder(path: string) {
       <div class="kv">
         <div class="item"><span class="k">合并份数</span><span class="v">{{ result.merged }}</span></div>
         <div class="item"><span class="k">复制份数</span><span class="v">{{ result.copied }}</span></div>
+        <div class="item"><span class="k">班级文件夹</span><span class="v">{{ (result.outs || []).length }} 个</span></div>
+      </div>
+      <div v-if="result.root" class="muted small rootline">
+        输出根目录：<span class="mono">{{ result.root }}</span>
       </div>
       <ul class="outs">
         <li v-for="(o, i) in result.outs || []" :key="i">
@@ -214,6 +274,31 @@ async function openFolder(path: string) {
 }
 .folderlist li,
 .outs li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  background: var(--c-surface-2);
+}
+.tip {
+  color: var(--c-text-3);
+  font-weight: 400;
+}
+.rootline {
+  margin: 6px 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.groups li {
   display: flex;
   align-items: center;
   gap: 10px;

@@ -34,11 +34,17 @@ _QNO_RE = re.compile(r"^第\s*(\d+)\s*题")
 # --------------------------------------------------------------------------- #
 # 小工具
 # --------------------------------------------------------------------------- #
+# 合并产物会带「合并错题集_」前缀，再次参与合并时必须能认回同一个学生
+_NAME_PREFIXES = ("合并错题集_", "错题集_")
+
+
 def docx_name(filename) -> str:
-    """从文件名提取学生姓名（去掉 .docx 与「错题集_」前缀）。"""
+    """从文件名提取学生姓名（去掉 .docx 与「错题集_」/「合并错题集_」前缀）。"""
     name = os.path.splitext(os.path.basename(str(filename)))[0]
-    if name.startswith("错题集_"):
-        name = name[len("错题集_"):]
+    for pre in _NAME_PREFIXES:
+        if name.startswith(pre):
+            name = name[len(pre):]
+            break
     return name.strip()
 
 
@@ -191,7 +197,14 @@ def merge_wrong_folders(folders, out_dir, deduplicate=False, copy_single=True,
         logs.append("没有可合并的文件夹。")
         return {"merged": 0, "copied": 0, "logs": logs, "outs": outs}
 
-    per_folder = [{docx_name(f): f for f in _list_docx(fd)} for fd in folder_list]
+    # 同一文件夹内若出现重名学生（例如既是错题集又是合并结果），全部保留，
+    # 合并时按顺序依次追加，不再互相覆盖。
+    per_folder: list = []
+    for fd in folder_list:
+        d: dict = {}
+        for f in _list_docx(fd):
+            d.setdefault(docx_name(f), []).append(f)
+        per_folder.append(d)
     all_names = sorted(set().union(*[set(d) for d in per_folder]))
 
     merged = 0
@@ -200,8 +213,8 @@ def merge_wrong_folders(folders, out_dir, deduplicate=False, copy_single=True,
         present = [(i, per_folder[i][name]) for i in range(len(per_folder))
                    if name in per_folder[i]]
         try:
-            if len(present) == 1:
-                src = present[0][1]
+            if len(present) == 1 and len(present[0][1]) == 1:
+                src = present[0][1][0]
                 dest = os.path.join(out_dir, os.path.basename(src))
                 if not copy_single:
                     _report("跳过（仅在单侧）：%s" % name)
@@ -213,11 +226,13 @@ def merge_wrong_folders(folders, out_dir, deduplicate=False, copy_single=True,
                     outs.append(dest)
                     _report("复制（仅单侧）：%s" % name)
                 continue
-            base_path = present[0][1]
-            dest_doc = Document(base_path)   # 以第一个文件夹为主（保留其样式/版式）
+            # 展平成「按文件夹顺序、文件夹内按文件名顺序」的文档列表
+            sources = [p for (_idx, paths) in present for p in paths]
+            base_path = sources[0]
+            dest_doc = Document(base_path)   # 以第一个文档为主（保留其样式/版式）
             seen = collect_numbers(dest_doc) if deduplicate else None
             next_part = count_parts(dest_doc)   # 基准文档已有的最大部分编号
-            for (_idx, path) in present[1:]:
+            for path in sources[1:]:
                 doc_i = Document(path)
                 next_part += 1
                 brk_p = dest_doc.add_paragraph()
@@ -230,8 +245,8 @@ def merge_wrong_folders(folders, out_dir, deduplicate=False, copy_single=True,
                 # 追加 doc_i；若其本身是合并结果，重排内部「部分」编号以保持有序
                 _copy_body_elements(dest_doc, doc_i, skip_numbers=seen,
                                     part_offset=next_part - 1)
-            prefix = ("错题集_" if any(os.path.basename(p[1]).startswith("错题集_")
-                                     for p in present) else "合并错题集_")
+            prefix = ("错题集_" if any(os.path.basename(p).startswith("错题集_")
+                                     for p in sources) else "合并错题集_")
             out = os.path.join(out_dir, "%s%s.docx" % (prefix, name))
             dest_doc.save(out)
             merged += 1

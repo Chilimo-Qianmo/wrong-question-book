@@ -143,7 +143,8 @@ def export_figures(pdf: str, images_root: str, out_dir: str | None = None,
     notes = []
     qs, gaps, declared = recognize.group_questions(lines, notes)
     spans = recognize.question_spans(qs, lay)
-    # 与识别保持一致：先排除误检表格，再对与表格重叠的图去重
+    # 与识别口径保持一致：表格区域也当作图片候选一起导出（由用户自行选择是否插入）
+    from app.core.layout import FigureRegion
     good = [t for t in lay.tables if not t.invalid_reason()]
     figs = []
     for f in lay.figures:
@@ -159,6 +160,9 @@ def export_figures(pdf: str, images_root: str, out_dir: str | None = None,
                 break
         if not dup:
             figs.append(f)
+    for t in good:
+        figs.append(FigureRegion(page=t.page, bbox=t.bbox))
+    figs.sort(key=lambda x: (x.page, x.bbox[1]))
     assign = assign_to_questions(figs, spans)
     result = {}
     for qno, flist in sorted(assign.items()):

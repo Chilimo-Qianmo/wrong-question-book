@@ -182,6 +182,7 @@ class MergeResult(BaseModel):
     copied: int = 0
     outs: list[str] = Field(default_factory=list)
     logs: list[str] = Field(default_factory=list)
+    root: str = ""
 
 
 class JobStatus(BaseModel):

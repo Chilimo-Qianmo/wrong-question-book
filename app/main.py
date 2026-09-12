@@ -24,7 +24,7 @@ from app.core import image_store as store, regions
 from app import paths
 from app.core.figures import assign_to_questions, crop_from_page, crop_from_image
 
-VERSION = "2.3.2"
+VERSION = "2.3.3"
 
 
 def _bundle_dir() -> str:
@@ -612,23 +612,91 @@ def jobs_generate(req: M.GenerateRequest):
     return {"job_id": job.id}
 
 
+MERGE_ROOT_NAME = "错题集合并"
+
+
+def _merge_root(out_dir: str = "") -> str:
+    """合并输出的根目录：没指定就用程序目录下的「错题集合并」。"""
+    return (out_dir or "").strip() or os.path.join(paths.data_dir(), MERGE_ROOT_NAME)
+
+
+def _collect_merge_folders(folders) -> list:
+    got = []
+    for f in (folders or []):
+        found = archive.expand_merge_folders(f) or ([f] if os.path.isdir(f) else [])
+        got.extend(found)
+    return sorted(set(got))
+
+
+def _group_by_class(folders) -> dict:
+    groups: dict = {}
+    for d in folders:
+        groups.setdefault(archive.class_of_folder(d), []).append(d)
+    return dict(sorted(groups.items()))
+
+
+@app.post("/api/merge/preview")
+def merge_preview(payload: dict):
+    """合并前预览：按班级分组、每组有多少文件夹与文档，以及输出根目录。"""
+    folders = _collect_merge_folders((payload or {}).get("folders"))
+    groups = _group_by_class(folders)
+    root = _merge_root((payload or {}).get("out_dir") or "")
+    out = []
+    total = 0
+    for cls, glds in groups.items():
+        n = 0
+        for g in glds:
+            if os.path.isdir(g):
+                n += len([f for f in os.listdir(g)
+                          if f.lower().endswith(".docx") and not f.startswith("~$")])
+        total += n
+        out.append({"cls": cls, "folders": glds, "docs": n,
+                    "out_dir": os.path.join(root, cls)})
+    return {"root": root, "groups": out, "total_docs": total,
+            "folder_count": len(folders), "root_name": MERGE_ROOT_NAME}
+
+
 @app.post("/api/jobs/merge")
 def jobs_merge(req: M.MergeRequest):
+    """合并错题集：按班级分组，分别输出到 <根目录>/<班级>/。"""
     def work(job):
-        folders = []
-        for f in req.folders:
-            got = archive.expand_merge_folders(f) or ([f] if os.path.isdir(f) else [])
-            folders.extend(got)
-        folders = sorted(set(folders))
+        root = _merge_root(req.out_dir)
+        os.makedirs(root, exist_ok=True)          # 先把「错题集合并」建出来
+        folders = _collect_merge_folders(req.folders)
         if not folders:
-            raise ValueError("没有找到包含错题集文档的文件夹")
-        job.log("待合并文件夹 %d 个" % len(folders))
-        out = req.out_dir or os.path.join(os.path.dirname(folders[0]), "合并输出")
-        res = merge_docx.merge_wrong_folders(folders, out, deduplicate=req.deduplicate,
-                                             copy_single=req.copy_single,
-                                             progress=lambda m: job.log(m))
-        return M.MergeResult(merged=res.get("merged", 0), copied=res.get("copied", 0),
-                             outs=res.get("outs") or [out], logs=res.get("logs") or []).model_dump()
+            raise ValueError("没有找到包含错题集文档的文件夹，请先添加要合并的错题集文件夹"
+                             "（已为你创建输出目录：%s）" % root)
+        groups = _group_by_class(folders)
+        job.log("待合并文件夹 %d 个，按班级分成 %d 组" % (len(folders), len(groups)))
+        job.log("输出根目录：%s" % root)
+        tot_m = tot_c = 0
+        outs, logs = [], []
+        for cls, glds in groups.items():
+            out = os.path.join(root, cls)
+            # 上次合并的产物先清掉，避免旧文件留在目录里造成「越合并越多」的错觉
+            stale = 0
+            if os.path.isdir(out):
+                for f in os.listdir(out):
+                    if (f.startswith("错题集_") or f.startswith("合并错题集_")) \
+                            and f.lower().endswith(".docx"):
+                        try:
+                            os.remove(os.path.join(out, f))
+                            stale += 1
+                        except OSError:
+                            pass
+            if stale:
+                job.log("【%s】清理上次合并产物 %d 份" % (cls, stale))
+            job.log("【%s】%d 个文件夹 → %s" % (cls, len(glds), out))
+            res = merge_docx.merge_wrong_folders(
+                glds, out, deduplicate=req.deduplicate, copy_single=req.copy_single,
+                progress=lambda m, c=cls: job.log("[%s] %s" % (c, m)))
+            tot_m += res.get("merged", 0)
+            tot_c += res.get("copied", 0)
+            outs.append(out)
+            logs.extend(res.get("logs") or [])
+        job.log("全部完成：合并 %d 份，复制 %d 份，输出 %d 个班级文件夹" % (tot_m, tot_c, len(outs)))
+        return M.MergeResult(merged=tot_m, copied=tot_c, outs=outs, logs=logs,
+                             root=root).model_dump()
     job = start("merge", work)
     return {"job_id": job.id}
 
