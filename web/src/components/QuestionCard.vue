@@ -24,16 +24,8 @@ const optionKeys = computed(() => {
 
 const confLow = computed(() => (props.q.conf || 0) < 0.9)
 const hasIssues = computed(() => (props.q.warnings || []).length > 0 || (props.q.dropped || []).length > 0)
+// 「已忽略的疑似图/表文字」默认收起，需要时点标题展开（避免核对时被大量信息淹没）
 const droppedOpen = ref(false)
-
-// 契约：有 warnings 或 dropped 的题目默认展开
-watch(
-  hasIssues,
-  (v) => {
-    if (v) droppedOpen.value = true
-  },
-  { immediate: true },
-)
 
 /* ===== 题干自动高度 ===== */
 const stemEl = ref<HTMLTextAreaElement | null>(null)
@@ -52,12 +44,39 @@ watch(
   { immediate: true },
 )
 
-/* ===== 选项编辑 ===== */
+/* ===== 选项编辑（文本域：自动换行 + 自动高度，一次看全） ===== */
+const optEls = new Map<string, HTMLTextAreaElement>()
+
+function setOptEl(key: string, el: Element | null) {
+  if (el) optEls.set(key, el as HTMLTextAreaElement)
+  else optEls.delete(key)
+}
+
+/** 让某个文本域按内容自适应高度 */
+function growEl(el: HTMLTextAreaElement | null) {
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = el.scrollHeight + 2 + 'px'
+}
+
+function growOpts() {
+  optEls.forEach((el) => growEl(el))
+}
+
 function onOptionInput(key: string, ev: Event) {
-  const value = (ev.target as HTMLInputElement).value
-  if (value === '') delete props.q.options[key]
+  const el = ev.target as HTMLTextAreaElement
+  growEl(el)
+  const value = el.value
+  if (value.trim() === '') delete props.q.options[key]
   else props.q.options[key] = value
 }
+
+onMounted(() => nextTick(growOpts))
+watch(
+  () => props.q.options,
+  () => nextTick(growOpts),
+  { deep: true, immediate: true },
+)
 
 /* ===== 配图 ===== */
 function removeFigure(index: number) {
@@ -108,12 +127,14 @@ function absorb(d: DroppedText, index: number) {
       <div class="options">
         <div v-for="k in optionKeys" :key="k" class="opt">
           <span class="okey">{{ k }}</span>
-          <input
-            type="text"
+          <textarea
+            :ref="(el) => setOptEl(k, el as Element | null)"
+            class="opttext"
+            rows="1"
             :value="q.options[k] || ''"
             :placeholder="'选项 ' + k"
             @input="onOptionInput(k, $event)"
-          />
+          ></textarea>
         </div>
       </div>
     </div>
@@ -253,11 +274,33 @@ function absorb(d: DroppedText, index: number) {
 }
 .opt {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
+}
+/* 选项文本域：可换行、随内容自动增高，长选项一次看全 */
+.opttext {
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: none;
+  overflow: hidden;
+  line-height: 1.5;
+  padding: 4px 8px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-sm);
+  font: inherit;
+  font-size: 13px;
+  color: var(--c-text);
+  background: var(--c-surface);
+  field-sizing: content;
+}
+.opttext:focus {
+  outline: none;
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 3px var(--c-primary-soft);
 }
 .okey {
   flex: none;
+  margin-top: 5px;
   width: 22px;
   height: 22px;
   border-radius: 50%;

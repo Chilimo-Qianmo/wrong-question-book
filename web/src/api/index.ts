@@ -131,6 +131,8 @@ export const api = {
     post<{ files: ImageFile[] }>('/api/images/unassign', { images_root: imagesRoot, qno, names }),
   imagesDelete: (imagesRoot: string, names: string[]) =>
     post<{ files: ImageFile[] }>('/api/images/delete', { images_root: imagesRoot, names }),
+  imagesClear: (imagesRoot: string) =>
+    post<{ removed: number; files: ImageFile[] }>('/api/images/clear', { images_root: imagesRoot }),
   imagesAutofill: (pdf: string, imagesRoot: string, questions: QuestionOut[]) =>
     post<{ assigned: Record<string, string[]> }>('/api/images/autofill', {
       pdf,

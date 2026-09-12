@@ -178,6 +178,25 @@ async function deleteImage(f: ImageFile) {
   }
 }
 
+/** 清空图片库：删除所有图片与分配关系，回到“默认无图片”的状态 */
+async function clearLibrary() {
+  if (!library.value.length) {
+    ui.notify('图片库已经是空的', 'warn')
+    return
+  }
+  if (!window.confirm('确定清空图片库吗？将删除「' + imagesRoot.value + '」下的 ' +
+    library.value.length + ' 张图片，并清空所有题目的配图（题目配置不受影响）。')) {
+    return
+  }
+  try {
+    const r = await api.imagesClear(imagesRoot.value)
+    await refresh()
+    ui.notify('已清空图片库（删除 ' + r.removed + ' 张）', 'success')
+  } catch (e) {
+    ui.notify(errText(e), 'error')
+  }
+}
+
 async function autofill() {
   if (!source.pdf) {
     ui.notify('自动抽取需要先在「① 选择来源」里选定试卷 PDF', 'warn')
@@ -234,6 +253,9 @@ async function autofill() {
                           @picked="importImages" />
             <button class="btn" :disabled="!imagesRoot || loading" @click="refresh">
               {{ loading ? '扫描中…' : '重新扫描' }}
+            </button>
+            <button class="btn ghost" :disabled="!imagesRoot || !library.length" @click="clearLibrary">
+              清空图片库
             </button>
           </div>
         </div>

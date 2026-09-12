@@ -423,7 +423,23 @@ def detect_questions(layout, config: dict | None = None, progress=None):
                        "as_answer": bool(cfg_tables[str(qno)].get("as_answer")),
                        "spec": cfg_tables[str(qno)]}]
         for f in cfg_figs.get(str(qno), []):
-            figures.append(dict(f, auto=False))
+            item = dict(f)
+            item["auto"] = False
+            if not item.get("url") and not item.get("path"):
+                bb = item.get("bbox") or []
+                if len(bb) >= 4 and layout.path:
+                    # 旧版本配置里只存了坐标，这里补上按区域裁剪的地址，
+                    # 否则前端拿不到图片会显示「配图暂不可预览」。
+                    item["url"] = _crop_url(layout, int(item.get("page") or 1), bb)
+            if item.get("url") or item.get("path"):
+                figures.append(item)
+            else:
+                dropped.append({
+                    "text": "[配图] 第 %s 页 %s" % (item.get("page"), item.get("bbox")),
+                    "page": int(item.get("page") or 0),
+                    "bbox": list(item.get("bbox") or []),
+                    "reason": "配置里的配图缺少可显示的原图地址，已跳过",
+                })
 
         if not stem:
             warns.append("题干为空")

@@ -71,7 +71,62 @@ function primaryRegion(q: { regions?: RegionOut[] }): RegionOut | undefined {
   return q.regions && q.regions.length ? q.regions[0] : undefined
 }
 
-function openBig(url: string) {
+/* ===== 放大：弹层预览（与配图页看图一致）；另加鼠标悬停放大镜 ===== */
+const lightbox = ref<{ url: string; title: string } | null>(null)
+const MAG_W = 320
+const MAG_H = 200
+const MAG_ZOOM = 2.6
+const mag = ref<{
+  url: string
+  top: number
+  left: number
+  w: number
+  h: number
+  rx: number
+  ry: number
+} | null>(null)
+
+/** 高分辨率版本（放大镜/弹层用，服务端渲染后缓存，首次稍慢） */
+function regionUrlHi(reg: RegionOut | undefined, dpi = 300): string {
+  const u = regionUrl(reg)
+  return u ? u.replace('dpi=150', 'dpi=' + dpi) : ''
+}
+
+function openLightbox(q: { qno: number; regions?: RegionOut[] }) {
+  const u = regionUrlHi(primaryRegion(q))
+  if (!u) {
+    ui.notify('这道题没有可放大的原题区域', 'warn')
+    return
+  }
+  lightbox.value = { url: u, title: '第 ' + q.qno + ' 题 · 原题区域' }
+}
+
+/** 鼠标在图片上移动 → 在图片下方显示一个放大镜小窗 */
+function onRegionMove(q: { qno: number; regions?: RegionOut[] }, ev: MouseEvent) {
+  const el = ev.currentTarget as HTMLImageElement
+  const r = el.getBoundingClientRect()
+  if (!r.width || !r.height) return
+  const rx = (ev.clientX - r.left) / r.width
+  const ry = (ev.clientY - r.top) / r.height
+  if (rx < 0 || rx > 1 || ry < 0 || ry > 1) {
+    mag.value = null
+    return
+  }
+  const url = regionUrlHi(primaryRegion(q))
+  if (!url) return
+  // 小窗默认贴在图片下方，并做视口边界收敛，避免超出屏幕
+  let left = r.left + (r.width - MAG_W) / 2
+  left = Math.max(8, Math.min(left, window.innerWidth - MAG_W - 8))
+  let top = r.bottom + 8
+  if (top + MAG_H > window.innerHeight - 8) top = Math.max(8, r.top - MAG_H - 8)
+  mag.value = { url, top, left, w: r.width, h: r.height, rx, ry }
+}
+
+function onRegionLeave() {
+  mag.value = null
+}
+
+function openInNewTab(url: string) {
   if (url) window.open(url, '_blank')
 }
 
@@ -248,7 +303,7 @@ async function cancelDetect() {
             <button
               v-if="primaryRegion(q)"
               class="btn mini ghost"
-              @click.stop="openBig(regionUrl(primaryRegion(q)))"
+              @click.stop="openLightbox(q)"
             >放大</button>
           </div>
           <img
@@ -258,12 +313,44 @@ async function cancelDetect() {
             :alt="'第' + q.qno + '题原题区域'"
             loading="lazy"
             @error="onRegionError(q.qno, primaryRegion(q)!.page)"
+            @mousemove="onRegionMove(q, $event)"
+            @mouseleave="onRegionLeave"
           />
           <div v-else-if="failed[q.qno]" class="empty-region">原题区域加载失败</div>
           <div v-else-if="!pdfPath" class="empty-region">来源不是试卷 PDF，无法显示原题区域</div>
           <div v-else class="empty-region">这道题没有定位到原题区域（题目来自题目配置）</div>
         </aside>
       </template>
+    </div>
+
+    <!-- 放大镜小窗：跟随鼠标显示指针附近的放大画面 -->
+    <div
+      v-if="mag"
+      class="magnifier"
+      :style="{ top: mag.top + 'px', left: mag.left + 'px', width: MAG_W + 'px', height: MAG_H + 'px' }"
+    >
+      <div
+        class="magview"
+        :style="{
+          backgroundImage: 'url(' + mag.url + ')',
+          backgroundSize: mag.w * MAG_ZOOM + 'px ' + mag.h * MAG_ZOOM + 'px',
+          backgroundPosition:
+            -(mag.rx * mag.w * MAG_ZOOM - MAG_W / 2) + 'px ' +
+            -(mag.ry * mag.h * MAG_ZOOM - MAG_H / 2) + 'px',
+        }"
+      ></div>
+      <span class="magtip">{{ Math.round(MAG_ZOOM * 100) }}%</span>
+    </div>
+
+    <!-- 放大弹层 -->
+    <div v-if="lightbox" class="lightbox" @click="lightbox = null">
+      <img :src="lightbox.url" :alt="lightbox.title" />
+      <div class="lb-bar">
+        <span>{{ lightbox.title }}</span>
+        <span class="spacer"></span>
+        <button class="btn mini" @click.stop="openInNewTab(lightbox.url)">新窗口打开</button>
+        <button class="btn mini" @click.stop="lightbox = null">关闭</button>
+      </div>
     </div>
 
     <EmptyHint
@@ -313,7 +400,7 @@ async function cancelDetect() {
 /* ===== 每题一行：左 2/3 + 右 1/3，天然对齐 ===== */
 .review-grid {
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: 1fr 1fr;   /* 题目编辑区与原题区域各占一半 */
   gap: 14px 16px;
   align-items: start;
 }
@@ -366,6 +453,62 @@ async function cancelDetect() {
   font-size: 12px;
   background: var(--c-surface-2);
   border-radius: var(--r-sm);
+}
+
+/* ===== 放大镜：贴在图片下方的小窗，显示指针附近的放大画面 ===== */
+.magnifier {
+  position: fixed;
+  z-index: 70;
+  border: 2px solid #fff;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 10px 28px rgba(17, 22, 28, 0.38);
+  background: #fff;
+  pointer-events: none;
+}
+.magview {
+  width: 100%;
+  height: 100%;
+  background-repeat: no-repeat;
+}
+.magtip {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  font-size: 11px;
+  color: #fff;
+  background: rgba(17, 22, 28, 0.6);
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+/* ===== 放大弹层（与配图页看图一致） ===== */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(17, 22, 28, 0.86);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 28px;
+  cursor: zoom-out;
+}
+.lightbox img {
+  max-width: 94vw;
+  max-height: 82vh;
+  background: #fff;
+  border-radius: 6px;
+}
+.lb-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 94vw;
+  color: #fff;
+  font-size: 13px;
 }
 
 /* 窄屏（如窗口很小时）自动改为上下布局，避免右侧被挤没 */

@@ -22,7 +22,7 @@ from app.core import engine, archive, excel as xl, docx_build, merge_docx, cache
 from app.core import image_store as store, regions
 from app.core.figures import assign_to_questions, crop_from_page, crop_from_image
 
-VERSION = "2.0.1"
+VERSION = "2.2.0"
 
 
 def _bundle_dir() -> str:
@@ -41,7 +41,8 @@ def data_dir() -> str:
 
 
 WEB_DIST = os.path.join(_bundle_dir(), "web", "dist")
-SETTINGS_PATH = os.path.join(data_dir(), "settings.json")
+# 允许用环境变量指定配置文件位置：自动化测试用临时配置，避免污染用户真实设置
+SETTINGS_PATH = os.environ.get("WTT_SETTINGS") or os.path.join(data_dir(), "settings.json")
 _DEFAULT_SETTINGS = M.Settings(
     out_dir=os.path.join(data_dir(), "错题集"),
     images_root=os.path.join(data_dir(), "图片"),
@@ -324,6 +325,22 @@ def images_delete(payload: dict):
     root = (payload or {}).get("images_root") or load_settings().images_root
     store.delete_files(root, (payload or {}).get("names") or [])
     return {"files": store.library(root)}
+
+
+@app.post("/api/images/clear")
+def images_clear(payload: dict):
+    """清空图片库：删除目录下所有图片并清空分配表（不影响题目配置）。"""
+    root = (payload or {}).get("images_root") or load_settings().images_root
+    removed = 0
+    if root and os.path.isdir(root):
+        for f in store.library(root):
+            try:
+                os.remove(f["path"])
+                removed += 1
+            except OSError:
+                pass
+    store.save_assign(root, {})
+    return {"removed": removed, "files": store.library(root)}
 
 
 @app.post("/api/images/autofill")

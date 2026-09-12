@@ -1,7 +1,7 @@
 {
   "name": "wtt-web",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.2.0",
   "type": "module",
   "description": "学生错题集生成器 · Vue3 前端（Vite + TypeScript + Pinia + vue-router）",
   "scripts": {
