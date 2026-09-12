@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, errText } from '@/api'
 import { subscribeJob, type JobStream } from '@/api/sse'
@@ -210,9 +210,10 @@ function unverifyAll() {
   review.setAllVerified(false)
 }
 
-function confirmGenerate() {
+/** 确认核验：全部勾选后进入下一步「③ 题目配图」（v2.3 起不再直接生成） */
+function confirmVerify() {
   if (!review.total) {
-    ui.notify('还没有题目可以生成', 'warn')
+    ui.notify('还没有题目，请先识别试卷或手动添加题目', 'warn')
     return
   }
   if (!review.allVerified) {
@@ -223,7 +224,18 @@ function confirmGenerate() {
     return
   }
   review.confirmed = true
-  router.push('/generate')
+  ui.notify('核对完成，下一步去「③ 题目配图」', 'success')
+  router.push('/images')
+}
+
+/** 新增一道自编题目（可自定义题干与选项） */
+function addQuestion() {
+  const q = review.addQuestion()
+  ui.notify('已新增第 ' + q.qno + ' 题，可直接编辑题干与选项', 'success')
+  void nextTick(() => {
+    const el = document.getElementById('qrow-' + q.qno)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  })
 }
 
 async function cancelDetect() {
@@ -359,18 +371,20 @@ async function cancelDetect() {
       text="请到「① 选择来源」选好试卷后点击「开始识别」，识别完成后题目会出现在这里。"
     >
       <button class="btn primary" @click="router.push('/')">去选择来源</button>
+      <button class="btn" @click="addQuestion">＋ 手动添加题目</button>
     </EmptyHint>
   </div>
 
   <!-- 底部操作栏 -->
   <div v-if="review.total" class="actionbar">
+    <button class="btn primary" @click="addQuestion">＋ 添加题目</button>
     <button class="btn" @click="verifyAll">一键全部核验</button>
     <button class="btn ghost" @click="unverifyAll">全部取消勾选</button>
     <span class="spacer"></span>
     <span class="counter" :class="{ ok: review.allVerified }">
       已核对 {{ review.verifiedCount }} / {{ review.total }} 题
     </span>
-    <button class="btn primary lg" @click="confirmGenerate">确认核验并生成</button>
+    <button class="btn primary lg" @click="confirmVerify">确认核验</button>
   </div>
 </template>
 

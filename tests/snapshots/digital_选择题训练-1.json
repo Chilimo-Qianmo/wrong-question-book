@@ -19,7 +19,7 @@
   ],
   "declared_count": null,
   "gaps": [],
-  "elapsed_ms": 375,
+  "elapsed_ms": 371,
   "questions": {
     "1": {
       "stem": "马铃薯是世界第四大主粮作物。甘肃“定西马铃薯”是中国国家地理标志产品，富含淀粉等营养物质。下列叙述正确的是：",
@@ -210,7 +210,7 @@
         "D": "④需在体外或小鼠腹腔进行克隆化培养和抗体检测"
       },
       "source": "text",
-      "tables": 1,
+      "tables": 0,
       "figures": 1
     }
   }

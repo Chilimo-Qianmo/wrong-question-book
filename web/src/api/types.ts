@@ -6,7 +6,7 @@ export type LayoutKind = 'digital' | 'scanned' | 'mixed'
 export type PageKind = 'digital' | 'scanned'
 
 /** 题目来源标注 */
-export type QuestionSource = 'text' | 'ocr' | 'config' | 'mixed'
+export type QuestionSource = 'text' | 'ocr' | 'config' | 'mixed' | 'manual'
 
 /** 任务状态 */
 export type JobState = 'running' | 'done' | 'error' | 'cancelled'

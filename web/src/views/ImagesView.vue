@@ -343,6 +343,16 @@ async function autofill() {
       </section>
     </div>
 
+    <!-- 底部：下一步 -->
+    <div class="nextbar">
+      <span class="muted">
+        配图完成后进入下一步生成错题集；也可以先跳过配图直接生成。
+      </span>
+      <span class="spacer"></span>
+      <RouterLink class="btn" to="/review">返回题目核对</RouterLink>
+      <RouterLink class="btn primary lg" to="/generate">下一步：生成 →</RouterLink>
+    </div>
+
     <!-- 大图预览 -->
     <div v-if="preview" class="lightbox" @click="preview = null">
       <img :src="mediaUrl(preview.url || preview.path)" :alt="preview.name" />
@@ -528,6 +538,18 @@ async function autofill() {
   width: 94vw;
   color: #fff;
   font-size: 13px;
+}
+
+.nextbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  margin-bottom: 80px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
 }
 
 @media (max-width: 1200px) {

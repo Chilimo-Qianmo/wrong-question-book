@@ -30,6 +30,8 @@ export function sourceLabel(source: QuestionSource | string): string {
       return '配置'
     case 'mixed':
       return '混合'
+    case 'manual':
+      return '自编'
     default:
       return String(source || '未知')
   }
@@ -46,6 +48,8 @@ export function sourceColor(source: QuestionSource | string): string {
       return 'blue'
     case 'mixed':
       return 'purple'
+    case 'manual':
+      return 'blue'
     default:
       return 'gray'
   }

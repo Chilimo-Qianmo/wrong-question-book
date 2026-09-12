@@ -56,6 +56,12 @@ def main() -> int:
     except OSError:
         pass
 
+    # 新环境第一次启动：先把 错题集/图片/题目配置 建好，用户打开即是可用状态
+    from app import paths
+    created = paths.ensure_dirs(app_dir())
+    if created and not args.no_window:
+        print("已创建目录：%s" % "、".join(os.path.basename(p) for p in created))
+
     import uvicorn
     port = args.port or free_port()
     url = "http://127.0.0.1:%d/" % port

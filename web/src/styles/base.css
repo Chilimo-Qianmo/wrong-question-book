@@ -99,13 +99,7 @@ button {
   font-size: 15px;
   opacity: 0.95;
 }
-.step .dot {
-  margin-left: auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #4bd08b;
-}
+/* 左侧导航不再显示状态小圆点（v2.3 移除） */
 .navfoot {
   margin-top: auto;
   padding: 10px;

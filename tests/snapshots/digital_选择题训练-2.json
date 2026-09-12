@@ -19,7 +19,7 @@
   ],
   "declared_count": null,
   "gaps": [],
-  "elapsed_ms": 561,
+  "elapsed_ms": 469,
   "questions": {
     "1": {
       "stem": "种子萌发受多种内外因素影响。相关叙述错误的是：",
@@ -210,7 +210,7 @@
         "D": "利用添加氨苄青霉素的培养基可初步筛选导入质粒的农杆菌"
       },
       "source": "text",
-      "tables": 1,
+      "tables": 0,
       "figures": 1
     }
   }

@@ -3,6 +3,8 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type { DroppedText, QuestionOut } from '@/api/types'
 import { mediaUrl } from '@/api'
 import SourceBadge from './SourceBadge.vue'
+import { useReviewStore } from '@/stores/review'
+import { useUiStore } from '@/stores/ui'
 
 // 单题核对卡片。
 // 说明：q 来自 Pinia store 里的响应式对象，这里直接改它的字段即可同步回全局状态
@@ -14,6 +16,7 @@ const props = defineProps<{
 }>()
 
 const OPTION_KEYS = ['A', 'B', 'C', 'D']
+const ui = useUiStore()
 
 /** 选项键：固定 A/B/C/D，再并上后端返回的多余键（如 E/F） */
 const optionKeys = computed(() => {
@@ -21,6 +24,25 @@ const optionKeys = computed(() => {
   Object.keys(props.q.options || {}).forEach((k) => keys.add(k))
   return Array.from(keys).sort()
 })
+
+const reviewStore = useReviewStore()
+
+/** 修改题号（与已有题号冲突时提示并还原） */
+function onQnoChange(ev: Event) {
+  const el = ev.target as HTMLInputElement
+  const next = Number(el.value)
+  if (!reviewStore.setQno(props.q.qno, next)) {
+    ui.notify('题号 ' + next + ' 已被占用，或不是有效数字', 'warn')
+    el.value = String(props.q.qno)
+  }
+}
+
+/** 删除本题 */
+function removeSelf() {
+  if (!window.confirm('确定删除「第 ' + props.q.qno + ' 题」吗？删除后该题不会出现在错题集里。')) return
+  reviewStore.removeQuestion(props.q.qno)
+  ui.notify('已删除第 ' + props.q.qno + ' 题', 'success')
+}
 
 const confLow = computed(() => (props.q.conf || 0) < 0.9)
 const hasIssues = computed(() => (props.q.warnings || []).length > 0 || (props.q.dropped || []).length > 0)
@@ -105,16 +127,30 @@ function absorb(d: DroppedText, index: number) {
   <article :id="'q-' + q.qno" class="qcard" :class="{ issue: hasIssues, flash: flashing }">
     <header class="qhead">
       <div class="qleft">
-        <span class="qno">第 {{ q.qno }} 题</span>
+        <span class="qno">第</span>
+        <input
+          class="qnoinput"
+          type="number"
+          min="1"
+          :value="q.qno"
+          title="可修改题号（需与答题表列名一致）"
+          @change="onQnoChange"
+        />
+        <span class="qno">题</span>
         <SourceBadge :source="q.source" />
-        <span class="conf" :class="{ low: confLow }">置信度 {{ Math.round((q.conf || 0) * 100) }}%</span>
-        <span class="pg">第 {{ q.page }} 页</span>
+        <span v-if="q.source !== 'manual'" class="conf" :class="{ low: confLow }">
+          置信度 {{ Math.round((q.conf || 0) * 100) }}%
+        </span>
+        <span v-if="q.page" class="pg">第 {{ q.page }} 页</span>
         <span v-if="hasIssues" class="badge orange">需关注</span>
       </div>
-      <label class="check">
-        <input v-model="q.verified" type="checkbox" />
-        已核对
-      </label>
+      <div class="qright">
+        <button class="btn mini danger" title="从错题集中删除这道题" @click="removeSelf">删除本题</button>
+        <label class="check">
+          <input v-model="q.verified" type="checkbox" />
+          已核对
+        </label>
+      </div>
     </header>
 
     <div class="field">
@@ -248,6 +284,28 @@ function absorb(d: DroppedText, index: number) {
 .qno {
   font-size: 15px;
   font-weight: 600;
+}
+/* 题号可编辑：方便自编题目或与答题表对齐 */
+.qnoinput {
+  width: 54px;
+  padding: 2px 6px;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-sm);
+  background: var(--c-surface);
+  color: var(--c-text);
+}
+.qnoinput:focus {
+  outline: none;
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 3px var(--c-primary-soft);
+}
+.qright {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .conf {
   font-size: 12px;

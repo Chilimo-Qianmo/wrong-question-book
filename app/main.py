@@ -20,9 +20,10 @@ from app import models as M
 from app.jobs import JOBS, start, sweep
 from app.core import engine, archive, excel as xl, docx_build, merge_docx, cache as cache_mod
 from app.core import image_store as store, regions
+from app import paths
 from app.core.figures import assign_to_questions, crop_from_page, crop_from_image
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 
 
 def _bundle_dir() -> str:
@@ -31,18 +32,15 @@ def _bundle_dir() -> str:
 
 
 def data_dir() -> str:
-    """用户数据目录：打包后是 exe 所在目录，源码运行是项目根目录。
+    """用户数据目录（见 app/paths.py）。
 
-    （不能直接用 __file__，否则打包后配置与输出会落到临时解包目录里。）
+    不能直接用 __file__，否则打包后配置与输出会落到临时解包目录里。
     """
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return _bundle_dir()
+    return paths.data_dir()
 
 
 WEB_DIST = os.path.join(_bundle_dir(), "web", "dist")
-# 允许用环境变量指定配置文件位置：自动化测试用临时配置，避免污染用户真实设置
-SETTINGS_PATH = os.environ.get("WTT_SETTINGS") or os.path.join(data_dir(), "settings.json")
+SETTINGS_PATH = paths.settings_path()
 _DEFAULT_SETTINGS = M.Settings(
     out_dir=os.path.join(data_dir(), "错题集"),
     images_root=os.path.join(data_dir(), "图片"),
@@ -459,7 +457,12 @@ def jobs_generate(req: M.GenerateRequest):
                      for q in questions},
             tables={str(q["qno"]): t["spec"] for q in questions for t in (q.get("tables") or [])
                     if t.get("spec")},
-            figures={str(q["qno"]): (q.get("figures") or []) for q in questions if q.get("figures")},
+            # 只把「用户自己的配图」写进配置：自动检测到的每次都会重新检测，
+            # 存进去会导致下一轮识别时同一张图被重复累加。
+            figures={str(q["qno"]): [
+                f for f in (q.get("figures") or [])
+                if not (f.get("auto") and not f.get("path"))
+            ] for q in questions if q.get("figures")},
         )
         job.progress("读取答题情况", 1, 4)
         wrongs, diag = xl.load_wrong_answers(req.excel, sorted(qmap))
@@ -590,5 +593,11 @@ else:
         return JSONResponse({"error": "前端未构建：请先在 web/ 下执行 npm install && npm run build"},
                             status_code=503)
 
+
+# 启动即确保三个工作目录存在（新环境第一次运行时目录还不存在）
+try:
+    paths.ensure_dirs()
+except Exception:                                       # noqa: BLE001
+    pass
 
 load_settings()

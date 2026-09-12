@@ -18,6 +18,8 @@ LETTERS = "ABCDEFGH"
 SECTION_HINT = ("选择题", "单选题", "单项选择")
 END_RE = re.compile(r"非选择题|主观题|解答题|简答题|计算题")
 INSTRUCTION_RE = re.compile(r"注意事项|须知|填涂|铅笔|签字笔|答题卡|本试卷|满分|考试用时|闭卷|评分标准")
+# 扫描件左侧竖排的「准考证号/姓名」等边栏字，可能被 OCR 并进正文行
+MARGIN_CHARS = set("号证考准名姓")
 DECLARE_RE = re.compile(r"共\s*([0-9０-９]{1,2})\s*[小道]题")
 
 
@@ -33,19 +35,43 @@ def parse_qno(text: str):
 def line_qno(ln):
     """识别该行是否以题号开头。
 
-    兼容两种排版：题号与分隔符同块（"13．塞罕坝…"），或被切成两块（"13" + "．塞罕坝…"）。
+    兼容三类排版：
+      1) 题号与题干同块：        "13．塞罕坝…"
+      2) 题号与分隔符被切成两块： "13" + "．塞罕坝…"
+      3) 行首混进了竖排边栏字：   ["姓", "3.我国科考队…"]
+         —— 扫描件左侧的「准考证号/姓名」竖排字常被 OCR 聚到与题干同一行，
+            而它们按 x 排序时排在题号前面，旧实现只看第一个块就会漏判这道题。
     """
     boxes = ln.boxes
     if not boxes:
         return None
-    n = parse_qno(boxes[0].text)
+
+    def _one(i: int):
+        if i >= len(boxes):
+            return None
+        n = parse_qno(boxes[i].text)
+        if n is not None:
+            return n
+        s = boxes[i].text.strip()
+        if re.fullmatch(r"\d{1,3}", s) and i + 1 < len(boxes):
+            nb = boxes[i + 1]
+            if nb.x0 - boxes[i].x1 <= 4.0 and re.match(r"^\s*[．.、:：]", nb.text):
+                return int(s)
+        return None
+
+    n = _one(0)
     if n is not None:
         return n
-    s = boxes[0].text.strip()
-    if re.fullmatch(r"\d{1,3}", s) and len(boxes) > 1:
-        nb = boxes[1]
-        if nb.x0 - boxes[0].x1 <= 4.0 and re.match(r"^\s*[．.、:：]", nb.text):
-            return int(s)
+    # 跳过行首的边栏杂字（单字：姓名准考证号等），再看下一个块
+    idx = 0
+    while idx < len(boxes) and idx < 3:
+        s = boxes[idx].text.strip()
+        if len(s) == 1 and (s in MARGIN_CHARS or not s.isalnum()):
+            idx += 1
+            continue
+        break
+    if idx:
+        return _one(idx)
     return None
 
 
@@ -108,6 +134,17 @@ def group_questions(lines, notes: list):
 
     for ln in lines[first_idx:]:
         qn = line_qno(ln)
+        # 兜底：期望的题号可能被 OCR 并进了别的文本框中间（扫描件竖排边栏字导致），
+        # 这时把该行切开，前半段归上一题，后半段作为这一题的开头，避免整题丢失。
+        if qn is None and expected is not None and cur is not None:
+            sp = split_line_at_qno(ln, expected)
+            if sp is not None:
+                head, tail = sp
+                if head is not None and head.boxes:
+                    questions[cur].append(head)
+                notes.append("第 %d 题的题号被并入了上一行的文本框，已自动切分恢复" % expected)
+                ln = tail
+                qn = line_qno(ln)
         if qn is not None and is_instruction(ln.text):
             qn = None                                  # 「2.回答选择题时…」这类说明不是题号
         if qn is not None and (expected is None or qn >= expected):
@@ -124,6 +161,57 @@ def group_questions(lines, notes: list):
         if cur is not None:
             questions[cur].append(ln)
     return questions, gaps, declared
+
+
+# 被并进正文的题号：前面必须是边栏字或空白，避免把「如图3.所示」这类正文误切成题号
+_MERGED_QNO_TPL = r"(?:[%s]|\s)(%d)\s*[．.、:：]\s*" % ("".join(sorted(MARGIN_CHARS)), 0)
+
+
+def split_line_at_qno(ln, target: int):
+    """把「题号被并进某一个文本框中间」的行切成两行。
+
+    例如扫描件里 OCR 输出："…下降名D姓3.我国科考队在太平洋…"
+    切分后：前半段仍属于上一题，后半段就是第 3 题的开头。
+    返回 (head_line|None, tail_line) 或 None。
+    """
+    pat = re.compile(r"(?:[%s]|\s)%d\s*[．.、:：]\s*" % ("".join(sorted(MARGIN_CHARS)), target))
+    for bi, b in enumerate(ln.boxes):
+        m = pat.search(b.text)
+        if not m:
+            continue
+        off = m.start()
+        # 题号本身从 m.end(0) 前回溯到数字处，这里直接用匹配结束位置作为切点
+        head_txt = b.text[:off].strip()
+        tail_txt = b.text[m.end(0):].strip()
+        if len(tail_txt) < 2:
+            continue
+        head_txt = head_txt + b.text[off:m.end(0)][:0]      # 保持简单：题号归到后半段
+        from app.core.lines import Box, Line
+        head = None
+        if head_txt:
+            hb = Box(text=head_txt, x0=b.x0, y0=b.y0, x1=b.x1, y1=b.y1,
+                     page=b.page, source=b.source, conf=b.conf)
+            head = Line(page=b.page)
+            head.add(hb)
+            for b2 in ln.boxes[:bi]:
+                head.add(b2)
+            head.sort_boxes()
+        tb = Box(text="%d．%s" % (target, tail_txt), x0=b.x0, y0=b.y0, x1=b.x1, y1=b.y1,
+                 page=b.page, source=b.source, conf=b.conf)
+        tail = Line(page=b.page)
+        tail.add(tb)
+        for b2 in ln.boxes[bi + 1:]:
+            tail.add(b2)
+        tail.sort_boxes()
+        return head, tail
+    return None
+
+
+def _clean_stem_start(text: str) -> str:
+    """去掉题干开头的边栏杂字与题号（如 "姓3.我国科考队…" → "我国科考队…"）。"""
+    t = text.strip()
+    t = re.sub(r"^[%s\s]+(?=\d{1,3}\s*[．.、:：])" % "".join(sorted(MARGIN_CHARS)), "", t)
+    return QNO_RE.sub("", t, count=1).strip()
 
 
 def _option_at(ln, i):
@@ -159,6 +247,11 @@ def _line_atoms(ln):
             i += consumed
         else:
             t = boxes[i].text.strip()
+            # 扫描件左侧的竖排边栏字（姓名/准考证号）会混进正文行，
+            # 单独一个字且属于边栏字集合时直接丢弃，避免污染题干与选项。
+            if len(t) == 1 and t in MARGIN_CHARS:
+                i += 1
+                continue
             if atoms and atoms[-1][0] == "txt":
                 atoms[-1][1] += t
             else:
@@ -177,11 +270,15 @@ def split_question(lines):
 
     cand = []                       # [(行号, 原子号, 字母)] 合格的字母候选
     for li, atoms in enumerate(all_atoms):
+        # 允许选项字母前面有极短的前导文本（如残留的边栏字），仍视为「行首选项」
+        start = 0
+        while start < len(atoms) and atoms[start][0] == "txt" and len(atoms[start][1].strip()) <= 1:
+            start += 1
         seen_opt = False
         for ai, a in enumerate(atoms):
             if a[0] != "opt":
                 continue
-            if ai == 0 or seen_opt:
+            if ai == start or seen_opt:
                 cand.append((li, ai, a[1]))
                 seen_opt = True
 
@@ -198,8 +295,7 @@ def split_question(lines):
             accepted.add((li, ai))
 
     if len(letters) < 2 or first is None:
-        stem = QNO_RE.sub("", "".join(ln.text for ln in lines).strip(), count=1).strip()
-        return stem, {}, []
+        return _clean_stem_start("".join(ln.text for ln in lines)), {}, []
 
     stem_parts, options, cur = [], {}, None
     for li, atoms in enumerate(all_atoms):
@@ -214,8 +310,7 @@ def split_question(lines):
             elif cur is not None:
                 options[cur] += a[1]
 
-    stem = QNO_RE.sub("", "".join(stem_parts).strip(), count=1).strip()
-    return stem, options, letters
+    return _clean_stem_start("".join(stem_parts)), options, letters
 
 
 def _crop_url(layout, page: int, bbox, dpi: int = 150) -> str:
@@ -425,6 +520,15 @@ def detect_questions(layout, config: dict | None = None, progress=None):
         for f in cfg_figs.get(str(qno), []):
             item = dict(f)
             item["auto"] = False
+            # 配置里的配图如果与本次自动检测到的是同一张（同页同坐标），跳过，
+            # 否则每次「识别→生成」都会把同一张图重复累加进题目。
+            bb = item.get("bbox") or []
+            if len(bb) >= 4 and any(
+                x.page == (item.get("page") or 0)
+                and abs(x.bbox[0] - bb[0]) < 4 and abs(x.bbox[1] - bb[1]) < 4
+                for x in figures
+            ):
+                continue
             if not item.get("url") and not item.get("path"):
                 bb = item.get("bbox") or []
                 if len(bb) >= 4 and layout.path:

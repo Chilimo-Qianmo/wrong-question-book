@@ -38,11 +38,7 @@ const effective = computed(() => ({
 
 onMounted(async () => {
   if (!settings.loaded) await settings.load()
-  // 从 ② 页「确认核验并生成」进来的：自动开始生成
-  if (review.confirmed && review.total && !task.value.running && !result.value) {
-    review.confirmed = false
-    void start()
-  }
+  // v2.3：核对页的「确认核验」只负责进入③配图，生成由用户在本页点「开始生成」触发
 })
 
 onUnmounted(() => {

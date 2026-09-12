@@ -63,6 +63,51 @@ export const useReviewStore = defineStore('review', () => {
     return questions.value.findIndex((q) => !q.verified)
   }
 
+  /** 下一个可用题号（识别结果里的最大题号 + 1，至少 1） */
+  function nextQno(): number {
+    const nums = questions.value.map((q) => Number(q.qno) || 0)
+    return (nums.length ? Math.max(...nums) : 0) + 1
+  }
+
+  /** 新增一道自编题目：插到指定位置（默认末尾） */
+  function addQuestion(afterIndex = -1): QuestionOut {
+    const q: QuestionOut = normalize({
+      qno: nextQno(),
+      page: 0,
+      stem: '',
+      regions: [],
+      options: { A: '', B: '', C: '', D: '' },
+      source: 'manual',
+      conf: 1,
+      warnings: ['自编题目：请填写题干与选项'],
+      dropped: [],
+      figures: [],
+      tables: [],
+      verified: false,
+    } as unknown as QuestionOut)
+    const list = questions.value.slice()
+    if (afterIndex >= 0 && afterIndex < list.length) list.splice(afterIndex + 1, 0, q)
+    else list.push(q)
+    questions.value = list
+    return q
+  }
+
+  /** 删除一道题 */
+  function removeQuestion(qno: number) {
+    questions.value = questions.value.filter((q) => q.qno !== qno)
+  }
+
+  /** 修改题号（避免与已有题号重复） */
+  function setQno(oldQno: number, newQno: number): boolean {
+    if (!newQno || newQno < 1) return false
+    if (questions.value.some((q) => q.qno === newQno && q.qno !== oldQno)) return false
+    const q = questions.value.find((item) => item.qno === oldQno)
+    if (!q) return false
+    q.qno = newQno
+    questions.value = questions.value.slice().sort((a, b) => a.qno - b.qno)
+    return true
+  }
+
   /** 把「已忽略文本」并入题干（核对页一键还原） */
   function absorbDropped(qno: number, index: number) {
     const q = questions.value.find((item) => item.qno === qno)
@@ -103,6 +148,10 @@ export const useReviewStore = defineStore('review', () => {
     applyPayload,
     setAllVerified,
     firstUnverifiedIndex,
+    nextQno,
+    addQuestion,
+    removeQuestion,
+    setQno,
     absorbDropped,
     reset,
   }
