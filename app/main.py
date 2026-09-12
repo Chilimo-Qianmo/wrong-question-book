@@ -227,9 +227,9 @@ def media_region(pdf: str = Query(...), page: int = Query(1),
     space='render' 时坐标是渲染图像素，按 scale 换算回 PDF 点再裁切。
     结果落盘缓存，同一区域只渲染一次。
     """
-    cache_dir, _render = engine.work_dirs(load_settings().out_dir)
     try:
-        fp = regions.crop_region(pdf, page, [x0, y0, x1, y1], space, scale, dpi, cache_dir)
+        fp = regions.crop_region(pdf, page, [x0, y0, x1, y1], space, scale, dpi,
+                                 regions.default_cache_dir())
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:                              # noqa: BLE001

@@ -11,6 +11,17 @@ import os
 import pdfplumber
 
 from app.core import cache as cache_mod
+from app import paths
+
+
+def default_cache_dir() -> str:
+    """区域裁剪缓存的固定位置。
+
+    必须与 out_dir 无关：识别任务的预热用的是请求里的 out_dir，
+    而 /api/media/region 用的是设置里的 out_dir，两者可能不同（来源页的输出目录
+    并不一定写进设置），用同一定位才能让预热真正命中。
+    """
+    return os.path.join(paths.data_dir(), ".cache")
 
 
 def region_cache_path(cache_dir: str, pdf: str, page: int, bbox, dpi: int) -> str:
@@ -34,7 +45,7 @@ def crop_region(pdf: str, page: int, bbox, space: str = "pdf", scale: float = 1.
         raise ValueError("区域无效")
     dpi = max(72, min(400, int(dpi or 150)))
     if not cache_dir:
-        cache_dir = os.path.join(os.path.dirname(ap), ".cache")
+        cache_dir = default_cache_dir()
     fp = region_cache_path(cache_dir, ap, page, (x0, y0, x1, y1), dpi)
     if os.path.exists(fp):
         return fp
@@ -56,7 +67,7 @@ def warm(pdf: str, questions, out_dir: str = "", dpi: int = 150) -> int:
     questions 里每项需带 regions: [{page, bbox, space, scale}, ...]
     返回成功预热的区域个数（失败静默跳过，不影响识别结果）。
     """
-    cache_dir, _ = _work_dirs(out_dir)
+    cache_dir = default_cache_dir()          # 与接口读取的位置保持一致
     done = 0
     for q in questions or []:
         for r in (q.get("regions") or []):
