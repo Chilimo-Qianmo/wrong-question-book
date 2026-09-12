@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { api, errText } from '@/api'
 import type { Settings } from '@/api/types'
 import PickerButton from '@/components/PickerButton.vue'
 import { defaultSettings, useSettingsStore } from '@/stores/settings'
@@ -42,6 +43,35 @@ async function save() {
 function restoreDefaults() {
   settings.settings = { ...defaultSettings } as Settings
   ui.notify('已恢复默认值，记得点保存', 'warn')
+}
+
+/* ===== 系统诊断：出问题时把结果发出来即可定位 ===== */
+const diagRunning = ref(false)
+const diagText = ref('')
+
+async function runDiagnose() {
+  diagRunning.value = true
+  diagText.value = ''
+  try {
+    const r = await api.diagnose(source.pdf || undefined)
+    diagText.value = JSON.stringify(r, null, 2)
+    ui.notify('诊断完成', 'success')
+  } catch (e) {
+    diagText.value = errText(e)
+    ui.notify(errText(e), 'error')
+  } finally {
+    diagRunning.value = false
+  }
+}
+
+async function copyDiagnose() {
+  if (!diagText.value) return
+  try {
+    await navigator.clipboard.writeText(diagText.value)
+    ui.notify('诊断结果已复制', 'success')
+  } catch {
+    ui.notify('复制失败，请手动选中复制', 'warn')
+  }
 }
 </script>
 
@@ -153,6 +183,18 @@ function restoreDefaults() {
       </div>
       <div class="btn-row env">
         <button class="btn" @click="ui.checkHealth()">重新检测</button>
+        <button class="btn primary" :disabled="diagRunning" @click="runDiagnose">
+          <span v-if="diagRunning" class="spinner"></span>
+          系统诊断
+        </button>
+        <button v-if="diagText" class="btn ghost" @click="copyDiagnose">复制结果</button>
+      </div>
+
+      <div v-if="diagText" class="diag">
+        <div class="muted small">
+          诊断内容包含目录、可写性与一次真实裁切测试；出问题时可复制发给开发者定位。
+        </div>
+        <pre>{{ diagText }}</pre>
       </div>
     </section>
 
@@ -167,6 +209,26 @@ function restoreDefaults() {
   </div>
 </template>
 
+<style scoped>
+.diag {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.diag pre {
+  max-height: 320px;
+  overflow: auto;
+  padding: 10px 12px;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+</style>
 <style scoped>
 .env {
   margin-top: 12px;

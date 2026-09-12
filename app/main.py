@@ -23,7 +23,7 @@ from app.core import image_store as store, regions
 from app import paths
 from app.core.figures import assign_to_questions, crop_from_page, crop_from_image
 
-VERSION = "2.3.0"
+VERSION = "2.3.1"
 
 
 def _bundle_dir() -> str:
@@ -104,6 +104,63 @@ def health():
             "engine": {"pdfplumber": has("pdfplumber"), "rapidocr": has("rapidocr_onnxruntime"),
                        "opencv": has("cv2"), "docx": has("docx")},
             "dpi": dpi_info}
+
+
+@app.get("/api/diagnose")
+def diagnose(pdf: str = Query("")):
+    """系统自检：路径、可写性、PDF 可用性，并做一次真实的区域裁切。
+
+    出问题时把这页的内容发出来即可定位，不用再猜。
+    """
+    import time as _t
+    s = load_settings()
+    cache = regions.default_cache_dir()
+    info: dict = {"version": VERSION, "data_dir": paths.data_dir(),
+                  "settings": {"out_dir": s.out_dir, "images_root": s.images_root},
+                  "cache_dir": {"path": cache, "exists": os.path.isdir(cache),
+                                "writable": False},
+                  "folders": {}, "tests": []}
+    for name in paths.APP_FOLDERS:
+        p = os.path.join(paths.data_dir(), name)
+        info["folders"][name] = {"path": p, "exists": os.path.isdir(p)}
+    try:
+        os.makedirs(cache, exist_ok=True)
+        probe = os.path.join(cache, ".write_probe")
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("ok")
+        os.remove(probe)
+        info["cache_dir"]["writable"] = True
+    except OSError as e:
+        info["cache_dir"]["error"] = str(e)
+
+    target = pdf or ""
+    if target:
+        ap = os.path.abspath(target)
+        info["pdf"] = {"path": ap, "exists": os.path.exists(ap),
+                       "size": os.path.getsize(ap) if os.path.exists(ap) else 0}
+        if os.path.exists(ap):
+            try:
+                src = engine.pdf_router.inspect_pdf(ap)
+                info["pdf"].update({"kind": src.kind.value, "pages": src.pages,
+                                    "text_chars": src.total_chars})
+            except Exception as e:                      # noqa: BLE001
+                info["pdf"]["inspect_error"] = str(e)
+            for label, space, scale, box in (
+                ("区域裁切(按PDF点)", "pdf", 1.0, None),
+            ):
+                t0 = _t.time()
+                try:
+                    with __import__("pdfplumber").open(ap) as doc:
+                        pg = doc.pages[0]
+                        b = box or [20, 60, float(pg.width) - 20, 200]
+                    fp = regions.crop_region(ap, 1, b, space, scale, 150)
+                    info["tests"].append({"name": label, "ok": True,
+                                          "ms": int((_t.time() - t0) * 1000),
+                                          "bytes": os.path.getsize(fp)})
+                except Exception as e:                  # noqa: BLE001
+                    info["tests"].append({"name": label, "ok": False,
+                                          "ms": int((_t.time() - t0) * 1000), "error": str(e)})
+    return info
 
 
 @app.get("/api/settings", response_model=M.Settings)

@@ -91,6 +91,8 @@ export function mediaUrl(pathOrUrl: string | null | undefined): string {
 export const api = {
   /* 基础 */
   health: () => get<HealthInfo>('/api/health'),
+  diagnose: (pdf?: string) =>
+    get<Record<string, unknown>>('/api/diagnose' + (pdf ? '?pdf=' + encodeURIComponent(pdf) : '')),
   getSettings: () => get<Settings>('/api/settings'),
   putSettings: (s: Settings) => put<Settings>('/api/settings', s),
   pick: (req: PickRequest) => post<{ paths: string[] }>('/api/dialog/pick', req),

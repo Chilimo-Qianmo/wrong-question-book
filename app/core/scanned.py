@@ -79,7 +79,7 @@ def detect_table_regions(img_path: str, boxes: list) -> list:
 def extract_scanned(path: str, pages: list, work_dir: str, scale: float = 3.0,
                     progress=None, use_cache: bool = True) -> Layout:
     lay = Layout(path=path, kind="scanned", scale=scale)
-    render_dir = os.path.join(work_dir, ".render")
+    render_dir = work_dir          # 目录由调用方给出，不再多套一层 .render
     if use_cache and os.path.isdir(render_dir):
         paths = {p: os.path.join(render_dir, "page_%03d.png" % p) for p in pages}
         if not all(os.path.exists(v) for v in paths.values()):

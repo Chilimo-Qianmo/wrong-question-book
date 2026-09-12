@@ -28,6 +28,7 @@ const flashIndex = ref(-1)
 const currentIndex = ref(0)
 const failed = ref<Record<number, boolean>>({})
 const retry = ref<Record<number, number>>({})
+const regionError = ref<Record<number, string>>({})
 
 const jobId = computed(() => source.detectJobId || String(route.query.job || ''))
 const task = computed(() => job.tasks.detect)
@@ -57,14 +58,34 @@ function regionUrl(reg: RegionOut | undefined): string {
   return '/api/media/region?' + q.toString()
 }
 
-/** 图片加载失败：自动重试 2 次（首次打开时后端可能还在渲染），再不成功才提示 */
-function onRegionError(qno: number, page: number) {
+/** 图片加载失败：先自动重试（后端可能正在渲染），仍失败就取回真实原因显示出来 */
+async function onRegionError(qno: number, page: number, url: string) {
   const n = (retry.value[page] || 0) + 1
-  if (n <= 2) {
+  if (n <= 3) {
     retry.value = { ...retry.value, [page]: n }
-  } else {
-    failed.value = { ...failed.value, [qno]: true }
+    return
   }
+  let detail = '未知错误'
+  try {
+    const r = await fetch(url)
+    const t = await r.text()
+    detail = 'HTTP ' + r.status + ' ' + t.slice(0, 300)
+  } catch (e) {
+    detail = String(e)
+  }
+  regionError.value = { ...regionError.value, [qno]: detail }
+  failed.value = { ...failed.value, [qno]: true }
+}
+
+/** 手动重试某题的原题区域 */
+function retryRegion(qno: number, page: number) {
+  const f = { ...failed.value }
+  delete f[qno]
+  failed.value = f
+  const e = { ...regionError.value }
+  delete e[qno]
+  regionError.value = e
+  retry.value = { ...retry.value, [page]: (retry.value[page] || 0) + 1 }
 }
 
 function primaryRegion(q: { regions?: RegionOut[] }): RegionOut | undefined {
@@ -324,11 +345,15 @@ async function cancelDetect() {
             :src="regionUrl(primaryRegion(q))"
             :alt="'第' + q.qno + '题原题区域'"
             loading="lazy"
-            @error="onRegionError(q.qno, primaryRegion(q)!.page)"
+            @error="onRegionError(q.qno, primaryRegion(q)!.page, regionUrl(primaryRegion(q)))"
             @mousemove="onRegionMove(q, $event)"
             @mouseleave="onRegionLeave"
           />
-          <div v-else-if="failed[q.qno]" class="empty-region">原题区域加载失败</div>
+          <div v-else-if="failed[q.qno]" class="empty-region err">
+            <div>原题区域加载失败</div>
+            <div class="errdetail">{{ regionError[q.qno] || '未知错误' }}</div>
+            <button class="btn mini" @click="retryRegion(q.qno, primaryRegion(q)!.page)">重试</button>
+          </div>
           <div v-else-if="!pdfPath" class="empty-region">来源不是试卷 PDF，无法显示原题区域</div>
           <div v-else class="empty-region">这道题没有定位到原题区域（题目来自题目配置）</div>
         </aside>
@@ -467,6 +492,22 @@ async function cancelDetect() {
   font-size: 12px;
   background: var(--c-surface-2);
   border-radius: var(--r-sm);
+}
+.empty-region.err {
+  color: var(--c-red);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+.errdetail {
+  color: var(--c-text-3);
+  font-size: 11px;
+  word-break: break-all;
+  max-height: 90px;
+  overflow: auto;
+  text-align: left;
+  width: 100%;
 }
 
 /* ===== 放大镜：贴在图片下方的小窗，显示指针附近的放大画面 ===== */
